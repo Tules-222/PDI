@@ -5,21 +5,21 @@
 
 Integrantes:
 
-- {Apellido, Nombre} | [@username](https://github.com/username)
-- {Apellido, Nombre} | [@username](https://github.com/username)
-- {Apellido, Nombre} | [@username](https://github.com/username)
-- {Apellido, Nombre} | [@username](https://github.com/username)
+- {Pogonza, David} | [@username](https://github.com/username)
+- {Tules, Roman} | [@username](https://github.com/username)
+- {Alcaraz, Eluney} | [@username](https://github.com/username)
+- {Carril, Martin} | [@martin-carril](https://github.com/martin-carril)
 
 Proyecto institucional **E.E.S.T Nº4 de Berazategui**.
 
 ## Elevator's Pitch
 
-- Para {cliente objetivo}
-- Quienes {necesidad y/o oportunidad}
+- Para comerciantes, proveedores y empresas
+- Quienes precisan materia prima para sus productos o vender la que poseen
 - El {nombre del proyecto} es un {categoría del producto}
 - Que {beneficio clave, razón para comprarlo}
-- Diferente a {otras soluciones existentes, por ejemplo...}
-- Nuestro proyecto {declaración de la diferencia}.
+- Diferente a MercadoLibre y Shoppify
+- Nuestro proyecto permite encontrar materiales/proveedores y obtenerlos mediante este portal de compras.
 
 ## Requisitos
 
