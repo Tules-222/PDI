@@ -1,7 +1,7 @@
 # Overshine Contacts
 
 **Descripción:**
-Página donde emprendedores y distribuidores puedan crear su propia página o publicación de forma sencilla, contactar con proveedores y vender sus productos.
+Página donde emprendedores y distribuidores puedan empezar o expandir su negocio, crear su propia página o publicación de forma sencilla, contactar con proveedores y vender sus productos.
 
 Integrantes:
 
