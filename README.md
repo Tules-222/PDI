@@ -6,7 +6,7 @@
 Integrantes:
 
 - {Tules, Roman} | [@Tules-222](https://github.com/Tules-222)
-- {Pogonza, David} | [@username](https://github.com/username)
+- {Pogonza, David} | [@PogonzaDavid](https://github.com/PogonzaDavid)
 - {Alcaraz, Eluney} | [@username](https://github.com/username)
 - {Carril, Martin} | [@martin-carril](https://github.com/martin-carril)
 
