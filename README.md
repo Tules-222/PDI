@@ -1,7 +1,7 @@
-# {nombre del proyecto}
+# Overshine Contacts
 
 **Descripción:**
-{breve explicación del proyecto}
+Página donde emprendedores y distribuidores puedan crear su propia página o publicación de forma sencilla, contactar con proveedores y vender sus productos.
 
 Integrantes:
 
@@ -14,12 +14,12 @@ Proyecto institucional **E.E.S.T Nº4 de Berazategui**.
 
 ## Elevator's Pitch
 
-- Para comerciantes, proveedores y empresas
-- Quienes precisan materia prima para sus productos o vender la que poseen
-- El {nombre del proyecto} es un {categoría del producto}
-- Que {beneficio clave, razón para comprarlo}
-- Diferente a MercadoLibre y Shoppify
-- Nuestro proyecto permite encontrar materiales/proveedores y obtenerlos mediante este portal de compras.
+- Para pequeños o grandes comerciantes, proveedores y empresas.
+- Quienes precisan materia prima para sus productos o vender la que poseen.
+- El Overshine Contacts es una página informativa de comercio.
+- Que permite desarrollar tus ideas de negocio con facilidad.
+- Diferente a MercadoLibre y Shoppify.
+- Nuestro proyecto permite encontrar información, materiales y proveedores, y obtenerlos mediante este portal de compras.
 
 ## Requisitos
 
