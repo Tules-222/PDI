@@ -7,7 +7,7 @@ Integrantes:
 
 - {Tules, Roman} | [@Tules-222](https://github.com/Tules-222)
 - {Pogonza, David} | [@PogonzaDavid](https://github.com/PogonzaDavid)
-- {Alcaraz, Eluney} | [@username](https://github.com/username)
+- {Alcaraz, Eluney} | [@EluneyAlcaraz](https://github.com/EluneyAlcaraz)
 - {Carril, Martin} | [@martin-carril](https://github.com/martin-carril)
 
 Proyecto institucional **E.E.S.T Nº4 de Berazategui**.
