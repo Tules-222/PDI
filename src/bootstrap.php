@@ -45,7 +45,7 @@ $app->get('/productos/{id}', function ($request, $response, array $args) use ($r
 
 
 $app->get('/productos/create', function ($request, $response) use ($renderer) {
-  return view($renderer, $response, '/productos/store.php' , [
+  return view($renderer, $response, '/productos/create.php' , [
   ]);
 });
 $app->post('/productos', function ($request, $response) use ($renderer) {
@@ -66,7 +66,7 @@ $app->put('/productos/{id}', function ($request, $response, array $args) use ($r
   $id = $args['id'];
   
   $stmt = $pdo -> prepare("UPDATE productos SET nombre = ?, precio = ?, descripcion = ? WHERE id = ?");
-  $stmt ->execute([$data['nombre'], $data['precio'], $data['description'], $id]);
+  $stmt ->execute([$data['nombre'], $data['precio'], $data['descripcion'], $id]);
 
   return view($renderer, $response, '/productos/detalles.php' , [ 
     'nombre' => $data['nombre'],

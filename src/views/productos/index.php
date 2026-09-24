@@ -6,6 +6,6 @@
   <title>Document</title>
 </head>
 <body>
-  mostrar listado
+  mostrar listado de productos
 </body>
 </html>
