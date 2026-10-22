@@ -33,5 +33,6 @@ function view(
   return $renderer->render($response, "layouts/base.php", [
     ...$data,
     "content" => $content,
+    "stylesheet" => $data["stylesheet"] ?? null,
   ]);
 }

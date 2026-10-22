@@ -4,6 +4,9 @@
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title><?= html($title) ?></title>
+        <?php if (!empty($stylesheet)): ?>
+            <link rel="stylesheet" href="<?= html((string) $stylesheet) ?>" />
+        <?php endif; ?>
     </head>
     <body>
        <?= $content ?>

@@ -186,7 +186,11 @@ final class SqlMigrationRunner
 
     fwrite(STDOUT, 'Aplicando ' . $migration['filename'] . "...\n");
 
-    $pdo->beginTransaction();
+    $transactionalDdl = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'pgsql';
+
+    if ($transactionalDdl) {
+      $pdo->beginTransaction();
+    }
 
     try {
       $pdo->exec($sql);
@@ -200,7 +204,9 @@ final class SqlMigrationRunner
         'filename' => $migration['filename'],
       ]);
 
-      $pdo->commit();
+      if ($pdo->inTransaction()) {
+        $pdo->commit();
+      }
 
       fwrite(STDOUT, 'Aplicada ' . $migration['filename'] . "\n");
     } catch (Throwable $throwable) {

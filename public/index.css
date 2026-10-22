@@ -38,6 +38,13 @@
             flex-shrink: 0;
         }
 
+        .logo img {
+            display: block;
+            width: 108px;
+            height: 72px;
+            object-fit: contain;
+        }
+
         /* BUSCADOR INTEGRADO */
         .search-container {
             flex-grow: 1;
@@ -192,6 +199,13 @@
             display: flex;
             flex-direction: column;
             flex-grow: 1;
+        }
+
+        .product-info p {
+            color: #555;
+            font-size: 13px;
+            line-height: 1.5;
+            margin-bottom: 12px;
         }
 
         .product-tag {

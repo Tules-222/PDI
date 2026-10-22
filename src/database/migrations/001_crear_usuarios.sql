@@ -1,8 +1,8 @@
-create TABLE user(
-    id int(10) AUTO_INCREMENT PRIMARY KEY,
-    nombre char(255),
-    rol char(255) UNIQUE,
-    gmail char(255) UNIQUE,
-    telefono int(10),
-    direccion char(255),
+CREATE TABLE usuarios (
+    id INTEGER AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(255) NOT NULL,
+    rol VARCHAR(100) NOT NULL,
+    gmail VARCHAR(255) NOT NULL UNIQUE,
+    telefono VARCHAR(30) NOT NULL,
+    direccion VARCHAR(255) NOT NULL
 );
