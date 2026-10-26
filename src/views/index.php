@@ -5,6 +5,9 @@ declare(strict_types=1);
 $productos = $productos ?? [];
 $search = $search ?? '';
 $error = $error ?? null;
+$usuarioActual = $usuarioActual ?? null;
+$totalPublicados = $totalPublicados ?? count($productos);
+$cantidadResultados = $cantidadResultados ?? count($productos);
 ?>
 <header>
 	<div class="header-container">
@@ -18,8 +21,21 @@ $error = $error ?? null;
 		</form>
 
 		<nav class="nav-actions" aria-label="Navegación principal">
-			<a class="btn btn-login" href="/usuarios/register">Ingresar</a>
-			<a class="btn btn-register" href="/usuarios/register">Registrarme</a>
+			<?php if ($usuarioActual === null): ?>
+				<a class="btn btn-login" href="/usuarios/login">Ingresar</a>
+				<a class="btn btn-register" href="/usuarios/register">Registrarme</a>
+			<?php else: ?>
+				<span><?= htmlspecialchars((string) $usuarioActual['nombre'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></span>
+				<a href="/mis-productos">Mis productos</a>
+				<a href="/mis-compras">Mis compras</a>
+				<a href="/mis-ventas">Mis ventas</a>
+				<a href="/mi-cuenta">Mi cuenta</a>
+				<?php if (($usuarioActual['rol'] ?? '') === 'admin'): ?>
+					<a href="/admin/productos">Revisar productos</a>
+					<a href="/admin/pedidos">Contratos</a>
+				<?php endif; ?>
+				<form method="POST" action="/usuarios/logout"><button type="submit">Cerrar sesión</button></form>
+			<?php endif; ?>
 			<a class="btn btn-cart" href="/productos/create">Publicar producto</a>
 		</nav>
 	</div>
@@ -32,8 +48,9 @@ $error = $error ?? null;
 
 <main>
 	<h2 class="section-title">
-		<?= $search !== '' ? 'Resultados de búsqueda' : 'Productos destacados' ?>
+		<?= $search !== '' ? 'Resultados de búsqueda' : ($totalPublicados <= 12 ? 'Productos publicados' : 'Productos destacados') ?>
 	</h2>
+	<?php if ($search !== ''): ?><p class="catalog-caption"><?= $cantidadResultados ?> resultados para “<?= htmlspecialchars($search, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>”</p><?php elseif ($totalPublicados > 12): ?><p class="catalog-caption">Destacados según búsquedas y solicitudes aceptadas.</p><?php endif; ?>
 
 	<?php if ($error !== null): ?>
 		<p role="alert"><?= htmlspecialchars($error, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></p>
