@@ -1,0 +1,291 @@
+        :root {
+            --primary-blue: #003366;
+            --secondary-blue: #0056b3;
+            --accent-blue: #e6f0fa;
+            --pure-white: #ffffff;
+            --light-gray: #f8f9fa;
+            --border-gray: #cccccc;
+            --text-dark: #333333;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            background-color: var(--light-gray);
+            color: var(--text-dark);
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+
+        /* Header Simple */
+        header {
+            background-color: var(--primary-blue);
+            color: var(--pure-white);
+            padding: 15px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+
+        .logo a {
+            color: var(--pure-white);
+            text-decoration: none;
+            font-size: 24px;
+            font-weight: bold;
+        }
+
+        .nav-links a {
+            color: var(--pure-white);
+            text-decoration: none;
+            font-size: 14px;
+            border: 1px solid var(--pure-white);
+            padding: 8px 16px;
+            border-radius: 4px;
+            transition: all 0.3s ease;
+        }
+
+        .nav-links a:hover {
+            background-color: var(--pure-white);
+            color: var(--primary-blue);
+        }
+
+        /* Contenedor Principal */
+        main {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 40px 20px;
+        }
+
+        .register-container {
+            background-color: var(--pure-white);
+            width: 100%;
+            max-width: 600px;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+            border-top: 5px solid var(--primary-blue);
+        }
+
+        .register-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .register-header h1 {
+            color: var(--primary-blue);
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .register-header p {
+            color: #666;
+            font-size: 15px;
+        }
+
+        /* Formulario */
+        form {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Campos de ancho completo */
+        .full-width {
+            grid-column: span 2;
+        }
+
+        label {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--primary-blue);
+        }
+
+        input {
+            padding: 12px;
+            border: 1px solid var(--border-gray);
+            border-radius: 4px;
+            font-size: 15px;
+            outline: none;
+            transition: border-color 0.3s ease;
+        }
+
+        input:focus {
+            border-color: var(--secondary-blue);
+            background-color: var(--accent-blue);
+        }
+
+        /* Botón de Registro */
+        .submit-group {
+            grid-column: span 2;
+            margin-top: 10px;
+        }
+
+        .btn-register {
+            background-color: var(--primary-blue);
+            color: var(--pure-white);
+            border: none;
+            padding: 14px;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 4px;
+            cursor: pointer;
+            width: 100%;
+            transition: background-color 0.3s ease;
+        }
+
+        .btn-register:hover {
+            background-color: var(--secondary-blue);
+        }
+
+        .form-footer {
+            grid-column: span 2;
+            text-align: center;
+            margin-top: 20px;
+            font-size: 14px;
+            color: #555;
+        }
+
+        .form-footer a {
+            color: var(--secondary-blue);
+            text-decoration: none;
+            font-weight: bold;
+        }
+
+        .form-footer a:hover {
+            text-decoration: underline;
+        }
+
+        /* Responsivo */
+        @media (max-width: 600px) {
+            form {
+                grid-template-columns: 1fr;
+            }
+            .full-width {
+                grid-column: span 1;
+            }
+            .submit-group {
+                grid-column: span 1;
+            }
+            .form-footer {
+                grid-column: span 1;
+            }
+            .register-container {
+                padding: 25px 20px;
+            }
+        }
+
+        main.auth-page {
+            width: 100%;
+            min-height: 100vh;
+            padding: clamp(18px, 4vw, 44px);
+            background: radial-gradient(circle at 85% 10%, #d8edf0 0, transparent 35%), #edf2f4;
+        }
+
+        .register-container {
+            max-width: 680px;
+            padding: clamp(24px, 5vw, 44px);
+            border: 1px solid #d7e0e4;
+            border-top: 5px solid #123b55;
+            box-shadow: 0 18px 48px rgba(18, 59, 85, .12);
+        }
+
+        .register-container .auth-home {
+            display: inline-block;
+            margin-bottom: 24px;
+            color: #123b55;
+            font-size: 15px;
+            font-weight: 700;
+            text-decoration: none;
+        }
+
+        .register-header,
+        .register-container > h1,
+        .register-container > .auth-intro {
+            text-align: left;
+        }
+
+        .register-container > h1 {
+            margin-bottom: 8px;
+            color: #123b55;
+            font-size: clamp(26px, 6vw, 34px);
+        }
+
+        .register-container > .auth-intro {
+            margin-bottom: 26px;
+            color: #536773;
+            line-height: 1.5;
+        }
+
+        .register-container form {
+            gap: 18px;
+        }
+
+        .register-container .form-group {
+            min-width: 0;
+        }
+
+        .register-container label {
+            color: #263f50;
+        }
+
+        .register-container input {
+            min-height: 46px;
+            min-width: 0;
+            border-color: #bdcbd1;
+            border-radius: 5px;
+        }
+
+        .register-container input:focus {
+            border-color: #167d89;
+            background: #fff;
+            box-shadow: 0 0 0 3px rgba(22, 125, 137, .14);
+        }
+
+        .register-container .submit-group button {
+            min-height: 48px;
+            border-radius: 5px;
+            background: #123b55;
+        }
+
+        .register-container .submit-group button:hover {
+            background: #167d89;
+        }
+
+        .register-container .form-footer {
+            margin-top: 4px;
+            line-height: 1.5;
+        }
+
+        .register-container .form-footer a {
+            color: #a94d32;
+        }
+
+        .register-container [role="alert"] {
+            margin-bottom: 18px;
+            padding: 12px;
+            border-left: 4px solid #b84036;
+            background: #fff0ed;
+            color: #79281f;
+            line-height: 1.45;
+        }
+
+        @media (max-width: 600px) {
+            .register-container {
+                padding: 24px 20px;
+            }
+        }

@@ -1,7 +1,7 @@
-create TABLE productos(
-    id int(10) AUTO_INCREMENT PRIMARY KEY,
-    nombre char(255),
-    descripcion char(255) UNIQUE,
-    precio int(10),
-    stock int(10),
+CREATE TABLE productos (
+    id INTEGER AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(255) NOT NULL,
+    precio DECIMAL(10, 2) NOT NULL,
+    descripcion VARCHAR(1000) NOT NULL,
+    creado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

@@ -1,38 +1,35 @@
 <?php
-// vistas/productos/create.php
-// Renderiza el formulario para crear un nuevo producto.
-// El form hace POST a /productos, que es la ruta que va a
-// guardar el registro en la base de datos.
-?>
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <title>Crear Producto</title>
-</head>
-<body>
-    <h1>Nuevo producto</h1>
 
-    <?php if (isset($error)): ?>
-        <p style="color:red;"><?= htmlspecialchars($error) ?></p>
+declare(strict_types=1);
+
+$error = $error ?? null;
+$producto = $producto ?? null;
+$formAction = $formAction ?? '/productos';
+$value = static fn(string $field): string => htmlspecialchars((string) ($producto[$field] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+?>
+<main>
+    <h1><?= $producto === null ? 'Crear producto' : 'Editar producto' ?></h1>
+
+    <?php if ($error !== null): ?>
+        <p role="alert"><?= htmlspecialchars($error, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></p>
     <?php endif; ?>
 
-    <form action="/productos" method="POST">
-        <label for="nombre">Nombre:</label><br>
-        <input type="text" id="nombre" name="nombre" required><br><br>
+    <form method="POST" action="<?= htmlspecialchars($formAction, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>">
+        <div>
+            <label for="nombre">Nombre del producto</label>
+            <input id="nombre" name="nombre" type="text" maxlength="255" value="<?= $value('nombre') ?>" required>
+        </div>
 
-        <label for="descripcion">Descripción:</label><br>
-        <textarea id="descripcion" name="descripcion"></textarea><br><br>
+        <div>
+            <label for="precio">Precio</label>
+            <input id="precio" name="precio" type="number" min="0" step="0.01" value="<?= $value('precio') ?>" required>
+        </div>
 
-        <label for="precio">Precio:</label><br>
-        <input type="number" id="precio" name="precio" step="0.01" min="0" required><br><br>
+        <div>
+            <label for="descripcion">Descripción</label>
+            <textarea id="descripcion" name="descripcion" maxlength="1000" rows="4" required><?= $value('descripcion') ?></textarea>
+        </div>
 
-        <label for="stock">Stock:</label><br>
-        <input type="number" id="stock" name="stock" min="0" required><br><br>
-
-        <button type="submit">Guardar</button>
+        <button type="submit"><?= $producto === null ? 'Crear producto' : 'Guardar cambios' ?></button>
     </form>
-
-    <a href="/productos">Volver al listado</a>
-</body>
-</html>
+</main>
