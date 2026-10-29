@@ -128,7 +128,7 @@ $app->get('/productos', function ($request, $response) use ($renderer) {
       'productos' => $productos,
     ]);
   } catch (PDOException $exception) {
-    return view($renderer->render($response->withStatus(500), '/productos/index.php'), '/productos/index.php', [
+    return view($renderer, $response->withStatus(500), '/productos/index.php', [
       'error' => 'No se pudieron cargar los productos.',
       'productos' => [],
     ]);
