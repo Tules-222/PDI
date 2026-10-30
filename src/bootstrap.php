@@ -14,6 +14,7 @@ require_once __DIR__ . '/utils/auth.php';
 require_once __DIR__ . '/utils/view.php';
 require_once __DIR__ . '/utils/products.php';
 require_once __DIR__ . '/utils/payments.php';
+require_once __DIR__ . '/utils/store_branding.php';
 
 Dotenv::createImmutable(__DIR__ . '/..')->safeLoad();
 
@@ -536,7 +537,7 @@ $app->get('/emprendimientos', function ($request, $response) use ($renderer, $re
   try {
     $pdo = (new Database())->getConnection();
     $query = $pdo->prepare(
-      "SELECT e.id, e.nombre, e.descripcion, e.localidad, e.provincia, COUNT(p.id) AS productos FROM emprendimientos e INNER JOIN usuarios u ON u.id = e.usuario_id LEFT JOIN productos p ON p.emprendimiento_id = e.id AND p.estado = 'aprobado' WHERE e.estado = 'activo' AND u.estado = 'activo' AND (:name_term = '' OR e.nombre LIKE :name_search OR e.descripcion LIKE :description_search OR e.localidad LIKE :localidad_search OR e.provincia LIKE :provincia_search) GROUP BY e.id ORDER BY e.nombre ASC LIMIT 48"
+      "SELECT e.id, e.nombre, e.descripcion, e.localidad, e.provincia, e.logo_path, e.color_primario, e.color_secundario, COUNT(p.id) AS productos FROM emprendimientos e INNER JOIN usuarios u ON u.id = e.usuario_id LEFT JOIN productos p ON p.emprendimiento_id = e.id AND p.estado = 'aprobado' WHERE e.estado = 'activo' AND u.estado = 'activo' AND (:name_term = '' OR e.nombre LIKE :name_search OR e.descripcion LIKE :description_search OR e.localidad LIKE :localidad_search OR e.provincia LIKE :provincia_search) GROUP BY e.id ORDER BY e.nombre ASC LIMIT 48"
     );
     $term = $search === '' ? '' : '%' . addcslashes($search, '\\%_') . '%';
     $query->execute([
@@ -601,6 +602,8 @@ $app->post('/emprendimientos', function ($request, $response) use ($renderer, $r
     'descripcion' => trim((string) ($data['descripcion'] ?? '')),
     'localidad' => trim((string) ($data['localidad'] ?? '')),
     'provincia' => trim((string) ($data['provincia'] ?? '')),
+    'color_primario' => strtolower(trim((string) ($data['color_primario'] ?? '#166534'))),
+    'color_secundario' => strtolower(trim((string) ($data['color_secundario'] ?? '#f0fdf4'))),
   ];
   if (
     $store['nombre'] === ''
@@ -608,23 +611,64 @@ $app->post('/emprendimientos', function ($request, $response) use ($renderer, $r
     || mb_strlen($store['descripcion']) > 500
     || mb_strlen($store['localidad']) > 100
     || mb_strlen($store['provincia']) > 100
+    || !isValidStoreColor($store['color_primario'])
+    || !isValidStoreColor($store['color_secundario'])
   ) {
     return view($renderer, $response->withStatus(422), '/emprendimientos/form.php', [
       'emprendimiento' => $store,
-      'error' => 'Completá un nombre válido y revisá los límites de longitud.',
+      'error' => 'Completá un nombre válido, revisá los límites de longitud y elegí colores válidos.',
     ]);
   }
 
+  $savedImages = [];
+  $pdo = null;
   try {
+    $uploads = $request->getUploadedFiles();
+    $logoUpload = validateStoreBrandImage($uploads['logo'] ?? null, 'logo');
+    $bannerUpload = validateStoreBrandImage($uploads['banner'] ?? null, 'banner');
+    $logoPath = $logoUpload === null ? null : storeStoreBrandImage($logoUpload, 'logo');
+    if ($logoPath !== null) {
+      $savedImages[] = $logoPath;
+    }
+    $bannerPath = $bannerUpload === null ? null : storeStoreBrandImage($bannerUpload, 'banner');
+    if ($bannerPath !== null) {
+      $savedImages[] = $bannerPath;
+    }
+
     $pdo = (new Database())->getConnection();
+    $pdo->beginTransaction();
     $stmt = $pdo->prepare(
-      "INSERT INTO emprendimientos (usuario_id, nombre, descripcion, localidad, provincia, estado) VALUES (:usuario_id, :nombre, :descripcion, :localidad, :provincia, 'activo')"
+      "INSERT INTO emprendimientos (usuario_id, nombre, descripcion, localidad, provincia, estado, logo_path, banner_path, color_primario, color_secundario) VALUES (:usuario_id, :nombre, :descripcion, :localidad, :provincia, 'activo', :logo_path, :banner_path, :color_primario, :color_secundario)"
     );
-    $stmt->execute(['usuario_id' => $user['id'], ...$store]);
-    recordAuditEvent($pdo, 'crear_emprendimiento', 'emprendimiento', (int) $pdo->lastInsertId(), 'Se creó un emprendimiento.', 'usuario:' . $user['id']);
+    $stmt->execute([
+      'usuario_id' => $user['id'],
+      ...$store,
+      'logo_path' => $logoPath,
+      'banner_path' => $bannerPath,
+    ]);
+    $storeId = (int) $pdo->lastInsertId();
+    recordAuditEvent($pdo, 'crear_emprendimiento', 'emprendimiento', $storeId, 'Se creó un emprendimiento.', 'usuario:' . $user['id']);
+    $pdo->commit();
     $_SESSION['flash'] = 'El emprendimiento se creó correctamente.';
     return $response->withHeader('Location', '/mis-emprendimientos')->withStatus(303);
+  } catch (StoreBrandImageException $exception) {
+    if ($pdo instanceof PDO && $pdo->inTransaction()) {
+      $pdo->rollBack();
+    }
+    foreach ($savedImages as $image) {
+      deleteStoreBrandImage($image);
+    }
+    return view($renderer, $response->withStatus(422), '/emprendimientos/form.php', [
+      'emprendimiento' => $store,
+      'error' => $exception->getMessage(),
+    ]);
   } catch (PDOException $exception) {
+    if ($pdo instanceof PDO && $pdo->inTransaction()) {
+      $pdo->rollBack();
+    }
+    foreach ($savedImages as $image) {
+      deleteStoreBrandImage($image);
+    }
     if (($exception->errorInfo[1] ?? null) === 1062) {
       return view($renderer, $response->withStatus(409), '/emprendimientos/form.php', [
         'emprendimiento' => $store,
@@ -632,6 +676,18 @@ $app->post('/emprendimientos', function ($request, $response) use ($renderer, $r
       ]);
     }
 
+    error_log($exception->getMessage());
+    return view($renderer, $response->withStatus(500), '/emprendimientos/form.php', [
+      'emprendimiento' => $store,
+      'error' => 'No se pudo crear el emprendimiento.',
+    ]);
+  } catch (Throwable $exception) {
+    if ($pdo instanceof PDO && $pdo->inTransaction()) {
+      $pdo->rollBack();
+    }
+    foreach ($savedImages as $image) {
+      deleteStoreBrandImage($image);
+    }
     error_log($exception->getMessage());
     return view($renderer, $response->withStatus(500), '/emprendimientos/form.php', [
       'emprendimiento' => $store,
@@ -648,7 +704,7 @@ $app->get('/emprendimientos/{id}/editar', function ($request, $response, array $
 
   try {
     $stmt = (new Database())->getConnection()->prepare(
-      'SELECT id, nombre, descripcion, localidad, provincia, estado FROM emprendimientos WHERE id = :id AND usuario_id = :usuario_id'
+      'SELECT id, nombre, descripcion, localidad, provincia, estado, logo_path, banner_path, color_primario, color_secundario FROM emprendimientos WHERE id = :id AND usuario_id = :usuario_id'
     );
     $stmt->execute(['id' => (int) $args['id'], 'usuario_id' => $user['id']]);
     $store = $stmt->fetch();
@@ -683,6 +739,8 @@ $app->post('/emprendimientos/{id}/actualizar', function ($request, $response, ar
     'descripcion' => trim((string) ($data['descripcion'] ?? '')),
     'localidad' => trim((string) ($data['localidad'] ?? '')),
     'provincia' => trim((string) ($data['provincia'] ?? '')),
+    'color_primario' => strtolower(trim((string) ($data['color_primario'] ?? '#166534'))),
+    'color_secundario' => strtolower(trim((string) ($data['color_secundario'] ?? '#f0fdf4'))),
   ];
   if (
     $id === false || $id < 1
@@ -691,28 +749,100 @@ $app->post('/emprendimientos/{id}/actualizar', function ($request, $response, ar
     || mb_strlen($store['descripcion']) > 500
     || mb_strlen($store['localidad']) > 100
     || mb_strlen($store['provincia']) > 100
+    || !isValidStoreColor($store['color_primario'])
+    || !isValidStoreColor($store['color_secundario'])
   ) {
     return view($renderer, $response->withStatus(422), '/emprendimientos/form.php', [
       'emprendimiento' => [...$store, 'id' => $id ?: ''],
       'editing' => true,
-      'error' => 'Completá un nombre válido y revisá los límites de longitud.',
+      'error' => 'Completá un nombre válido, revisá los límites de longitud y elegí colores válidos.',
     ]);
   }
 
+  $pdo = null;
+  $savedImages = [];
+  $oldImages = [];
   try {
     $pdo = (new Database())->getConnection();
-    $stmt = $pdo->prepare(
-      'UPDATE emprendimientos SET nombre = :nombre, descripcion = :descripcion, localidad = :localidad, provincia = :provincia WHERE id = :id AND usuario_id = :usuario_id'
+    $pdo->beginTransaction();
+    $currentQuery = $pdo->prepare(
+      'SELECT logo_path, banner_path FROM emprendimientos WHERE id = :id AND usuario_id = :usuario_id FOR UPDATE'
     );
-    $stmt->execute([...$store, 'id' => $id, 'usuario_id' => $user['id']]);
+    $currentQuery->execute(['id' => $id, 'usuario_id' => $user['id']]);
+    $current = $currentQuery->fetch();
+    if ($current === false) {
+      $pdo->rollBack();
+      return $renderError($response, 404, 'No encontramos ese emprendimiento.');
+    }
+
+    $uploads = $request->getUploadedFiles();
+    $logoUpload = validateStoreBrandImage($uploads['logo'] ?? null, 'logo');
+    $bannerUpload = validateStoreBrandImage($uploads['banner'] ?? null, 'banner');
+    $removeLogo = $logoUpload === null && ($data['eliminar_logo'] ?? '') === '1';
+    $removeBanner = $bannerUpload === null && ($data['eliminar_banner'] ?? '') === '1';
+    $logoPath = $removeLogo ? null : $current['logo_path'];
+    $bannerPath = $removeBanner ? null : $current['banner_path'];
+    if ($removeLogo && is_string($current['logo_path'])) {
+      $oldImages[] = $current['logo_path'];
+    }
+    if ($removeBanner && is_string($current['banner_path'])) {
+      $oldImages[] = $current['banner_path'];
+    }
+    if ($logoUpload !== null) {
+      $logoPath = storeStoreBrandImage($logoUpload, 'logo');
+      $savedImages[] = $logoPath;
+      if (is_string($current['logo_path'])) {
+        $oldImages[] = $current['logo_path'];
+      }
+    }
+    if ($bannerUpload !== null) {
+      $bannerPath = storeStoreBrandImage($bannerUpload, 'banner');
+      $savedImages[] = $bannerPath;
+      if (is_string($current['banner_path'])) {
+        $oldImages[] = $current['banner_path'];
+      }
+    }
+
+    $stmt = $pdo->prepare(
+      'UPDATE emprendimientos SET nombre = :nombre, descripcion = :descripcion, localidad = :localidad, provincia = :provincia, logo_path = :logo_path, banner_path = :banner_path, color_primario = :color_primario, color_secundario = :color_secundario WHERE id = :id AND usuario_id = :usuario_id'
+    );
+    $stmt->execute([
+      ...$store,
+      'logo_path' => $logoPath,
+      'banner_path' => $bannerPath,
+      'id' => $id,
+      'usuario_id' => $user['id'],
+    ]);
     if ($stmt->rowCount() > 0) {
       recordAuditEvent($pdo, 'editar_emprendimiento', 'emprendimiento', $id, 'Se actualizaron los datos comerciales.', 'usuario:' . $user['id']);
+    }
+    $pdo->commit();
+    foreach (array_unique($oldImages) as $image) {
+      deleteStoreBrandImage($image);
     }
     $_SESSION['flash'] = $stmt->rowCount() > 0
       ? 'El emprendimiento se actualizó correctamente.'
       : 'No encontramos ese emprendimiento o no había cambios.';
     return $response->withHeader('Location', '/mis-emprendimientos')->withStatus(303);
+  } catch (StoreBrandImageException $exception) {
+    if ($pdo instanceof PDO && $pdo->inTransaction()) {
+      $pdo->rollBack();
+    }
+    foreach ($savedImages as $image) {
+      deleteStoreBrandImage($image);
+    }
+    return view($renderer, $response->withStatus(422), '/emprendimientos/form.php', [
+      'emprendimiento' => [...$store, 'id' => $id],
+      'editing' => true,
+      'error' => $exception->getMessage(),
+    ]);
   } catch (PDOException $exception) {
+    if ($pdo instanceof PDO && $pdo->inTransaction()) {
+      $pdo->rollBack();
+    }
+    foreach ($savedImages as $image) {
+      deleteStoreBrandImage($image);
+    }
     if (($exception->errorInfo[1] ?? null) === 1062) {
       return view($renderer, $response->withStatus(409), '/emprendimientos/form.php', [
         'emprendimiento' => [...$store, 'id' => $id],
@@ -721,6 +851,19 @@ $app->post('/emprendimientos/{id}/actualizar', function ($request, $response, ar
       ]);
     }
 
+    error_log($exception->getMessage());
+    return view($renderer, $response->withStatus(500), '/emprendimientos/form.php', [
+      'emprendimiento' => [...$store, 'id' => $id],
+      'editing' => true,
+      'error' => 'No se pudo actualizar el emprendimiento.',
+    ]);
+  } catch (Throwable $exception) {
+    if ($pdo instanceof PDO && $pdo->inTransaction()) {
+      $pdo->rollBack();
+    }
+    foreach ($savedImages as $image) {
+      deleteStoreBrandImage($image);
+    }
     error_log($exception->getMessage());
     return view($renderer, $response->withStatus(500), '/emprendimientos/form.php', [
       'emprendimiento' => [...$store, 'id' => $id],
@@ -867,7 +1010,7 @@ $app->get('/emprendimientos/{id}', function ($request, $response, array $args) u
   try {
     $pdo = (new Database())->getConnection();
     $storeQuery = $pdo->prepare(
-      "SELECT e.id, e.usuario_id, e.nombre, e.descripcion, e.localidad, e.provincia, u.nombre AS vendedor_nombre FROM emprendimientos e INNER JOIN usuarios u ON u.id = e.usuario_id WHERE e.id = :id AND e.estado = 'activo' AND u.estado = 'activo'"
+      "SELECT e.id, e.usuario_id, e.nombre, e.descripcion, e.localidad, e.provincia, e.logo_path, e.banner_path, e.color_primario, e.color_secundario, u.nombre AS vendedor_nombre FROM emprendimientos e INNER JOIN usuarios u ON u.id = e.usuario_id WHERE e.id = :id AND e.estado = 'activo' AND u.estado = 'activo'"
     );
     $storeQuery->execute(['id' => $id]);
     $store = $storeQuery->fetch();
@@ -908,6 +1051,10 @@ $app->get('/emprendimientos/{id}', function ($request, $response, array $args) u
         'localidad' => $store['localidad'],
         'provincia' => $store['provincia'],
         'descripcion_vendedor' => $store['descripcion'],
+        'logo_path' => $store['logo_path'],
+        'banner_path' => $store['banner_path'],
+        'color_primario' => $store['color_primario'],
+        'color_secundario' => $store['color_secundario'],
       ],
       'sellerProducts' => $storeProducts,
       'sellerRating' => $ratingQuery->fetch() ?: ['promedio' => null, 'cantidad' => 0],
@@ -991,6 +1138,7 @@ $app->get('/', function ($request, $response) use ($renderer) {
     'precio_asc' => 'Menor precio',
     'precio_desc' => 'Mayor precio',
     'nombre' => 'De la A-Z',
+    'mas_vendidos' => 'Más vendidos (últimos 90 días)',
   ];
   if (!isset($sortOptions[$sort])) {
     $sort = 'recientes';

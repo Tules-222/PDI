@@ -7,12 +7,22 @@ $sellerProducts = $sellerProducts ?? [];
 $sellerRating = $sellerRating ?? ['promedio' => null, 'cantidad' => 0];
 $followerCount = $followerCount ?? 0;
 $isFollowing = $isFollowing ?? false;
+$primaryColor = isValidStoreColor((string) ($seller['color_primario'] ?? '')) ? (string) $seller['color_primario'] : '#166534';
+$secondaryColor = isValidStoreColor((string) ($seller['color_secundario'] ?? '')) ? (string) $seller['color_secundario'] : '#f0fdf4';
 ?>
 <main class="page-content">
   <a class="back-link" href="/">← Volver al catálogo</a>
-  <section class="seller-profile form-card">
-    <p class="eyebrow">Emprendimiento de Emprendi</p>
-    <h1><?= html((string) $seller['nombre']) ?></h1>
+  <section class="seller-profile form-card" style="--store-primary: <?= html($primaryColor) ?>; --store-primary-text: <?= html(storeBrandColorText($primaryColor)) ?>; --store-secondary: <?= html($secondaryColor) ?>; --store-secondary-text: <?= html(storeBrandColorText($secondaryColor)) ?>;">
+    <?php if (!empty($seller['banner_path'])): ?>
+      <div class="seller-brand-banner"><img src="<?= html((string) $seller['banner_path']) ?>" alt="Banner de <?= html((string) $seller['nombre']) ?>"></div>
+    <?php endif; ?>
+    <div class="seller-brand-heading">
+      <?php if (!empty($seller['logo_path'])): ?><img class="seller-brand-logo" src="<?= html((string) $seller['logo_path']) ?>" alt="Logo de <?= html((string) $seller['nombre']) ?>"><?php endif; ?>
+      <div>
+        <p class="eyebrow">Emprendimiento de Emprendi</p>
+        <h1><?= html((string) $seller['nombre']) ?></h1>
+      </div>
+    </div>
     <?php if (!empty($seller['localidad']) || !empty($seller['provincia'])): ?>
       <p class="seller-location"><?= html(implode(', ', array_filter([$seller['localidad'] ?? '', $seller['provincia'] ?? '']))) ?></p>
     <?php endif; ?>

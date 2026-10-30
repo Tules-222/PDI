@@ -128,6 +128,13 @@ aplicar la migración correspondiente. Se pueden crear varias tiendas y asociar
 cada producto a una de ellas. Pausar una tienda oculta sus productos del
 catálogo y evita nuevas compras; los pedidos guardan el nombre de la tienda
 como referencia histórica.
+Cada tienda puede configurar un logo, un banner y dos colores desde su
+formulario de edición. Se aceptan imágenes JPEG, PNG y WebP de hasta 5 MB; el
+logo debe medir al menos 100 × 100 píxeles y el banner 640 × 180. La migración
+020 agrega estos campos; aplicala con `composer run-script migrate` en cada
+entorno. El catálogo también puede ordenarse por unidades vendidas: cuenta
+únicamente pedidos creados en los últimos 90 días con pago aprobado y estado
+entregado.
 
 Los vendedores pueden proponer ofertas con precio y fechas de vigencia desde
 "Mis productos". La oferta solo se publica después de la aprobación

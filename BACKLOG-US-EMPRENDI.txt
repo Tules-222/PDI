@@ -24,15 +24,14 @@ ALCANCE DEL ANALISIS
   indicado.
 
 RESUMEN
-Hechas o cubiertas con el modelo actual: US-001, US-002, US-004, US-005,
+Implementadas antes de esta revision: US-001, US-002, US-004, US-005,
 US-007, US-008, US-009, US-010, US-011, US-012, US-013, US-014, US-015,
 US-017, US-018, US-019, US-020, US-021, US-022, US-023, US-024, US-025,
 US-026, US-027, US-028, US-030, US-031, US-032, US-033, US-034, US-035,
 US-036, US-037, US-038 y US-039.
-Parciales o requieren validacion: US-003, US-006, US-016 y US-040.
-Pendientes: US-029.
-Decisiones pendientes: definir umbrales de US-029, periodo y estados para el
-ranking "mas vendidos" de US-016, y alcance visual de US-006.
+Implementadas y validadas en esta revision: US-006 y US-016.
+Parciales o requieren validacion externa: US-003 y US-040.
+Pendiente por definicion de producto: US-029.
 
 DECISIONES CONFIRMADAS PARA EL BACKLOG
 - Multiples tiendas por cuenta: SI, implementar US-007 y adaptar productos,
@@ -47,15 +46,18 @@ DECISIONES CONFIRMADAS PARA EL BACKLOG
   publicarse.
 - Metricas: basarse en pedidos pagados/entregados; no inventar etiquetas de
   reputacion ni umbrales.
+- US-006: cada emprendimiento permite logo, banner y colores principal/de
+  acento propios.
+- US-016: "mas vendidos" cuenta unidades de pedidos pagados y entregados
+  creados durante los ultimos 90 dias.
 - Soporte: canal configurable; no publicar contacto ficticio.
 
-PRIORIDADES PROPUESTAS PARA CREAR ISSUES
+PRIORIDADES PENDIENTES
 P0 — Seguridad y confiabilidad: completar la matriz de permisos y las pruebas
 de acceso cruzado de US-040.
 P1 — Experiencia base: validar SMTP real para US-003.
-P2 — Funciones comerciales y comunidad: US-029.
-P3 — Decisiones de producto: US-016 (periodo del ranking "mas vendidos") y
-US-029 (umbrales para etiquetas de reputacion).
+P2 — Definiciones de producto: acordar umbrales para US-029 antes de crear
+etiquetas de reputacion.
 Las prioridades son una propuesta de orden, no una confirmacion de requisitos.
 
 ======================================================================
@@ -126,27 +128,35 @@ Alcance actual: cada emprendimiento tiene un perfil publico con nombre,
 ubicacion, descripcion y productos aprobados de esa tienda. Correo, direccion
 y telefono privados no se exponen.
 Criterios de aceptacion:
-- El vendedor puede actualizar su descripcion y ubicacion desde su perfil.
-- El perfil publico muestra los datos comerciales habilitados y unicamente
-  productos aprobados de esa cuenta.
+- El vendedor puede actualizar descripcion y ubicacion de cada emprendimiento
+  propio.
+- El perfil publico de cada emprendimiento muestra sus datos comerciales y
+  unicamente sus productos aprobados.
 - Los datos privados (correo, direccion y telefono) no se exponen en el perfil
   publico sin una decision explicita de producto.
 Los datos visibles se limitan a nombre, ubicacion, descripcion y productos
 aprobados; las tiendas y cuentas inactivas no se publican.
 
 US-006 — Personalizacion del perfil comercial
-ESTADO: PARCIAL / ALCANCE POR DEFINIR
+ESTADO: HECHA — LOGO, BANNER Y PALETA DE COLORES
 Como vendedor, quiero personalizar la presentacion de mi perfil, para
 diferenciar mi negocio.
-Alcance actual: se puede editar una descripcion de vendedor; no hay carga de
-logo, banner ni selector de colores.
-Criterios de aceptacion propuestos:
-- El vendedor puede configurar los elementos visuales que se definan para el
-  perfil, y los cambios se muestran en su perfil publico.
-- Los archivos se validan por tipo, tamano y contenido; los archivos invalidos
-  se rechazan con un mensaje claro.
-Decision necesaria: definir si se incluyen logo, banner, colores u otros
-elementos. No crear un editor visual hasta acordar ese alcance.
+Alcance actual: cada tienda permite cargar o reemplazar un logo y un banner,
+elegir un color principal y uno de acento, y quitar las imagenes. Los cambios
+se aplican al perfil publico y a las tarjetas de busqueda.
+Criterios de aceptacion:
+- El vendedor puede personalizar por separado cada emprendimiento de su cuenta.
+- Solo se aceptan imagenes JPEG, PNG o WebP; logo de al menos 100 x 100 y
+  banner de al menos 640 x 180; maximo 5 MB por archivo y 40 megapixeles.
+- La validacion del servidor comprueba contenido y MIME, no solo el nombre del
+  archivo; entradas invalidas muestran un error y no sustituyen imagenes previas.
+- Los colores se validan como hexadecimal de seis digitos y se muestran con
+  contraste legible.
+DECISION CONFIRMADA: logo, banner y colores principal/de acento. La migracion
+020 agrega personalizacion por emprendimiento.
+Validado por HTTP: guardar logo, banner y colores; rechazar un banner menor al
+minimo sin reemplazar las imagenes previas; quitar el logo sin afectar el
+banner; y rechazar con 404 la edicion desde otra cuenta.
 
 US-007 — Administracion de multiples emprendimientos
 ESTADO: HECHA — FLUJOS PRINCIPALES VALIDADOS
@@ -264,17 +274,19 @@ Criterios de aceptacion:
 - La categoria se puede combinar con busqueda, orden y rango de precios.
 
 US-016 — Ordenamiento de productos
-ESTADO: PARCIAL
+ESTADO: HECHA — MAS VENDIDOS EN 90 DIAS
 Como comprador, quiero ordenar los resultados, para comparar productos.
-Alcance actual: el catalogo ofrece recientes, A-Z, menor precio y mayor precio.
-Falta "mas vendidos".
+Alcance actual: el catalogo ofrece recientes, A-Z, menor precio, mayor precio
+y mas vendidos.
 Criterios de aceptacion:
 - Cada criterio disponible devuelve resultados en el orden indicado.
-- "Mas vendidos" ordena por unidades vendidas usando un periodo y estados de
-  compra definidos y consistentes.
-Decision necesaria: definir si el ranking considera todos los tiempos o un
-periodo (por ejemplo, ultimos 30 dias) y si cuenta pedidos pagados, enviados o
-entregados. No mostrar un ranking ficticio si no hay una definicion acordada.
+- "Mas vendidos" ordena por cantidad de unidades en pedidos pagados y
+  entregados dentro del periodo acordado; empates se resuelven de forma estable.
+DECISION CONFIRMADA: contar unidades de pedidos con pago aprobado y estado
+entregado, creados durante los ultimos 90 dias. Los productos sin ventas quedan
+al final. Validado con datos temporales en una transaccion revertida: los
+productos se ordenan por unidades y se excluyen compras antiguas, impagas o no
+entregadas.
 
 US-017 — Ofertas vigentes
 ESTADO: HECHA — MIGRACION Y FLUJOS PRINCIPALES VALIDADOS
@@ -508,8 +520,6 @@ US-032 — Seguir vendedores
 ESTADO: HECHA COMO SEGUIMIENTO DE EMPRENDIMIENTOS
 Como comprador, quiero seguir o dejar de seguir vendedores, para encontrar
 facilmente los perfiles que me interesan.
-Alcance actual: se pueden guardar productos en favoritos, pero no seguir
-vendedores.
 Criterios de aceptacion:
 - Un usuario autenticado puede seguir y dejar de seguir un perfil de vendedor.
 - La relacion no se duplica y el contador coincide con los seguidores reales.
@@ -683,14 +693,15 @@ DEPENDENCIAS Y SECUENCIA RECOMENDADA
 7. US-007: validar que las futuras ampliaciones mantengan aislamiento por
    tienda y permisos cruzados.
 
-NOTAS PARA CREAR ISSUES
-- Crear un issue por US, usando el identificador original (US-001 a US-040)
-  para mantener correspondencia con el documento recibido.
-- Para historias HECHAS, crear issues de documentacion/cierre y marcarlas como
-  completadas solo despues de validar el flujo en la aplicacion.
-- Para historias PARCIALES, describir por separado la funcionalidad existente
-  y los criterios pendientes de completar.
-- US-007, US-017, US-037 y US-038 tienen sus flujos principales implementados y
-  validados; crear/cerrar las issues de seguimiento correspondientes.
-- No incluir credenciales, correos privados, datos de usuarios ni contenidos
-  de .env en issues publicos.
+ISSUES PUBLICADAS EN GITHUB
+- Se crearon 40 issues individuales, en orden, de US-001 (#22) a US-040
+  (#61); cada issue incluye el estado y el alcance vigente de esta revision.
+- Quedaron cerradas las 37 historias implementadas: US-001, US-002, US-004 a
+  US-028, y US-030 a US-039.
+- Quedaron abiertas US-003 (#24), US-029 (#50) y US-040 (#61), que siguen
+  parciales o pendientes segun este backlog.
+- La issue agrupada #21 se cerro como reemplazada y tiene un comentario con
+  enlaces a las 40 issues individuales. Las issues #18-#20 ya estaban cerradas
+  como duplicadas.
+- Se conservaron sin cambios las issues antiguas #4-#12.
+- No se publicaron credenciales, datos privados ni contenidos de .env.

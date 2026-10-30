@@ -42,6 +42,7 @@ function catalogOrderBy(string $sort): string
     'precio_asc' => ' ORDER BY ' . currentProductPriceSql('p') . ' ASC, p.id DESC',
     'precio_desc' => ' ORDER BY ' . currentProductPriceSql('p') . ' DESC, p.id DESC',
     'nombre' => ' ORDER BY nombre ASC, id DESC',
+    'mas_vendidos' => " ORDER BY (SELECT COALESCE(SUM(ci.cantidad), 0) FROM compra_items ci INNER JOIN compras c ON c.id = ci.compra_id WHERE ci.producto_id = p.id AND c.estado_pago = 'aprobado' AND c.estado = 'entregado' AND c.creado_en >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 90 DAY)) DESC, p.id DESC",
     default => ' ORDER BY creado_en DESC, id DESC',
   };
 }
