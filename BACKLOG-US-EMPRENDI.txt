@@ -1,0 +1,696 @@
+BACKLOG DE USER STORIES — EMPRENDI
+Revision del estado del sitio: 30/10/2026
+
+OBJETIVO
+Este documento conserva las 40 historias del texto original y las adapta al
+producto y al codigo que existen en este repositorio. Sirve para crear issues
+de GitHub, registrar como completado el trabajo existente y planificar el
+trabajo pendiente.
+
+ALCANCE DEL ANALISIS
+- La aplicacion principal es el sitio Emprendi servido desde /public y
+  construido desde /src.
+- El repositorio tambien contiene /layered-architecture-main y /contacts.
+  No se consideran funcionalidades de la aplicacion activa salvo que se
+  integren expresamente.
+- El sitio actual usa cuentas de usuario que tambien pueden vender. El perfil
+  publico del vendedor y sus productos no son entidades independientes de
+  "emprendimiento".
+- "Hecha" significa que hay un flujo equivalente en el codigo inspeccionado;
+  no reemplaza una prueba funcional completa ni una validacion visual.
+- Las historias Parciales deben completarse antes de marcarlas como hechas.
+- Las historias Pendientes requieren desarrollo.
+- Las historias En decision no deben implementarse hasta cerrar el alcance
+  indicado.
+
+RESUMEN
+Hechas o cubiertas con el modelo actual: US-001, US-002, US-004, US-005,
+US-007, US-008, US-009, US-010, US-011, US-012, US-013, US-014, US-015,
+US-017, US-018, US-019, US-020, US-021, US-022, US-023, US-024, US-025,
+US-026, US-027, US-028, US-030, US-031, US-032, US-033, US-034, US-035,
+US-036, US-037, US-038 y US-039.
+Parciales o requieren validacion: US-003, US-006, US-016 y US-040.
+Pendientes: US-029.
+Decisiones pendientes: definir umbrales de US-029, periodo y estados para el
+ranking "mas vendidos" de US-016, y alcance visual de US-006.
+
+DECISIONES CONFIRMADAS PARA EL BACKLOG
+- Multiples tiendas por cuenta: SI, implementar US-007 y adaptar productos,
+  perfiles, permisos y pedidos.
+- Administracion: conservar PIN compartido. La auditoria registra la sesion
+  compartida, no una identidad personal.
+- Recuperacion: dejar listo el envio SMTP por entorno y no simular entrega si
+  faltan credenciales.
+- Chat: base de datos y actualizacion periodica, sin tiempo real en la primera
+  version.
+- Ofertas: propuestas de vendedores con aprobacion administrativa antes de
+  publicarse.
+- Metricas: basarse en pedidos pagados/entregados; no inventar etiquetas de
+  reputacion ni umbrales.
+- Soporte: canal configurable; no publicar contacto ficticio.
+
+PRIORIDADES PROPUESTAS PARA CREAR ISSUES
+P0 — Seguridad y confiabilidad: completar la matriz de permisos y las pruebas
+de acceso cruzado de US-040.
+P1 — Experiencia base: validar SMTP real para US-003.
+P2 — Funciones comerciales y comunidad: US-029.
+P3 — Decisiones de producto: US-016 (periodo del ranking "mas vendidos") y
+US-029 (umbrales para etiquetas de reputacion).
+Las prioridades son una propuesta de orden, no una confirmacion de requisitos.
+
+======================================================================
+GRUPO 1 — USUARIOS Y AUTENTICACION
+======================================================================
+
+US-001 — Registro de usuarios
+ESTADO: HECHA
+Como visitante, quiero crear una cuenta, para comprar productos y utilizar la
+plataforma.
+Alcance actual: el registro valida los campos, evita correos duplicados,
+guarda la contrasena con hash y asigna el rol fijo de usuario.
+Criterios de aceptacion:
+- Con datos validos se crea la cuenta y se inicia la sesion.
+- Con datos incompletos, correo invalido o ya registrado se informa el error y
+  no se crea una cuenta duplicada.
+
+US-002 — Inicio de sesion
+ESTADO: HECHA
+Como usuario registrado, quiero iniciar sesion, para acceder a las funciones
+de mi cuenta.
+Alcance actual: se verifican las credenciales y se rechazan cuentas
+bloqueadas.
+Criterios de aceptacion:
+- Con credenciales correctas y cuenta activa se inicia sesion.
+- Con credenciales incorrectas o cuenta no activa se rechaza el acceso sin
+  revelar cual dato fue incorrecto.
+
+US-003 — Recuperacion segura de contrasena
+ESTADO: PARCIAL — PRUEBA DE ENVIO SMTP PENDIENTE
+Como usuario que olvido su contrasena, quiero restablecerla usando mi correo
+registrado, para recuperar el acceso a mi cuenta.
+Criterios de aceptacion:
+- El usuario puede solicitar instrucciones ingresando su correo.
+- La respuesta no revela si ese correo esta registrado.
+- El enlace de recuperacion es aleatorio, de un solo uso, expira y no cambia la
+  contrasena si es invalido o vencio.
+- Con un enlace valido se guarda una contrasena nueva con hash y se invalidan
+  los enlaces anteriores.
+Implementado: tokens aleatorios guardados como hash, de un solo uso y con una
+hora de vigencia; envio por SMTP configurable, formulario CSRF y mensajes que
+no revelan si el correo esta registrado. Sin configuracion SMTP, la pantalla
+lo informa y no simula el envio. La migracion 015 debe aplicarse en cada base.
+Pendiente: validar el envio y el restablecimiento de extremo a extremo con
+credenciales SMTP reales.
+DECISION CONFIRMADA: SMTP por entorno; no afirmar que se envio el correo si
+faltan credenciales.
+
+US-004 — Gestion de cuenta personal
+ESTADO: HECHA
+Como usuario, quiero consultar y modificar mis datos, para mantener actualizada
+mi cuenta.
+Alcance actual: cada usuario edita su propio perfil, datos de contacto y
+presentacion comercial; puede cambiar su contrasena.
+Criterios de aceptacion:
+- Al guardar datos validos se actualiza la cuenta autenticada.
+- Un usuario no puede leer ni modificar los datos privados de otra cuenta.
+
+======================================================================
+GRUPO 2 — EMPRENDIMIENTOS Y PERFIL COMERCIAL
+======================================================================
+
+US-005 — Perfil publico de vendedor
+ESTADO: HECHA — PERFIL COMERCIAL PUBLICO
+Como usuario vendedor, quiero completar y mostrar mi perfil comercial, para que
+los compradores conozcan quien ofrece los productos.
+Alcance actual: cada emprendimiento tiene un perfil publico con nombre,
+ubicacion, descripcion y productos aprobados de esa tienda. Correo, direccion
+y telefono privados no se exponen.
+Criterios de aceptacion:
+- El vendedor puede actualizar su descripcion y ubicacion desde su perfil.
+- El perfil publico muestra los datos comerciales habilitados y unicamente
+  productos aprobados de esa cuenta.
+- Los datos privados (correo, direccion y telefono) no se exponen en el perfil
+  publico sin una decision explicita de producto.
+Los datos visibles se limitan a nombre, ubicacion, descripcion y productos
+aprobados; las tiendas y cuentas inactivas no se publican.
+
+US-006 — Personalizacion del perfil comercial
+ESTADO: PARCIAL / ALCANCE POR DEFINIR
+Como vendedor, quiero personalizar la presentacion de mi perfil, para
+diferenciar mi negocio.
+Alcance actual: se puede editar una descripcion de vendedor; no hay carga de
+logo, banner ni selector de colores.
+Criterios de aceptacion propuestos:
+- El vendedor puede configurar los elementos visuales que se definan para el
+  perfil, y los cambios se muestran en su perfil publico.
+- Los archivos se validan por tipo, tamano y contenido; los archivos invalidos
+  se rechazan con un mensaje claro.
+Decision necesaria: definir si se incluyen logo, banner, colores u otros
+elementos. No crear un editor visual hasta acordar ese alcance.
+
+US-007 — Administracion de multiples emprendimientos
+ESTADO: HECHA — FLUJOS PRINCIPALES VALIDADOS
+Historia original: Como usuario con varios emprendimientos, quiero
+administrarlos desde una misma cuenta.
+Alcance implementado: cada cuenta conserva la tienda inicial; puede crear,
+editar y pausar otras tiendas. Los productos, perfiles publicos y snapshots de
+compra se asocian a un emprendimiento.
+Criterios si se confirma el alcance:
+- El usuario puede crear, seleccionar, editar y administrar mas de una tienda.
+- Cada tienda tiene perfil y catalogo separados.
+- Las operaciones, ventas y permisos se limitan a la tienda seleccionada.
+DECISION CONFIRMADA: permitir varias tiendas por cuenta como entidad propia,
+propiedad de una cuenta. La migracion 014 crea una tienda inicial por cuenta
+existente, conserva la titularidad y vincula productos e historial de pedidos.
+Validado con sesion autenticada: creacion, edicion y pausa de una tienda
+adicional; publicacion de un producto asociado a la tienda, confirmacion de
+pedido y snapshot de tienda; una cuenta ajena recibe 404 al intentar editar
+ese producto. La publicacion queda pendiente de moderacion antes de aparecer
+en el catalogo.
+
+US-008 — Administracion de productos propios
+ESTADO: HECHA CON EL MODELO ACTUAL
+Como vendedor, quiero administrar mis productos, para mantener actualizado mi
+catalogo.
+Alcance actual: cada usuario consulta, edita y elimina productos propios; los
+cambios de contenido vuelven a revision y los pedidos conservan una copia de
+los datos comerciales necesarios.
+Criterios de aceptacion:
+- El vendedor solo ve y modifica sus propias publicaciones desde "Mis
+  productos".
+- Las publicaciones aprobadas y sus cambios respetan el flujo de moderacion.
+- El historial de compras conserva los datos del producto necesarios cuando
+  este deja de estar disponible.
+
+======================================================================
+GRUPO 3 — PRODUCTOS
+======================================================================
+
+US-009 — Publicacion de productos
+ESTADO: HECHA
+Como vendedor, quiero publicar productos, para ofrecerlos a los compradores.
+Alcance actual: se validan nombre, descripcion, precio, categoria, unidad,
+compra minima, stock, confirmacion de producto real e imagenes; la publicacion
+queda pendiente de revision.
+Criterios de aceptacion:
+- Una publicacion valida se guarda asociada a la cuenta y queda pendiente.
+- Los datos invalidos impiden guardar y se explican al vendedor.
+- Los productos pendientes o rechazados no aparecen como disponibles en el
+  catalogo publico.
+
+US-010 — Fotografia obligatoria
+ESTADO: HECHA
+Como vendedor, quiero agregar fotografias a mis productos, para mostrar sus
+caracteristicas.
+Alcance actual: se exige al menos una imagen valida; se admiten hasta cinco
+imagenes JPEG, PNG o WebP con limite de tamano.
+Criterios de aceptacion:
+- Una imagen valida permite enviar la publicacion a revision.
+- Sin imagen o con un archivo no permitido, no se puede publicar y se informa
+  el motivo.
+
+US-011 — Control de stock
+ESTADO: HECHA
+Como vendedor, quiero definir el stock de mis productos, para controlar su
+disponibilidad.
+Alcance actual: se valida stock entero y compra minima, se comprueba nuevamente
+al confirmar el pedido y se descuenta dentro de una transaccion.
+Criterios de aceptacion:
+- No se puede agregar al carrito ni confirmar una cantidad superior al stock.
+- No se puede comprar un producto sin stock confirmado o que no este aprobado.
+- El stock se reserva/descuenta una sola vez cuando se confirma el pedido.
+
+US-012 — Edicion de productos
+ESTADO: HECHA
+Como vendedor, quiero editar mis productos, para actualizar su informacion,
+imagenes y stock.
+Criterios de aceptacion:
+- El vendedor puede modificar solo productos propios y los datos se validan.
+- Un producto actualizado queda pendiente de una nueva revision antes de volver
+  a aparecer como aprobado.
+- Cada producto conserva al menos una imagen valida.
+
+======================================================================
+GRUPO 4 — BUSQUEDA, FILTROS Y OFERTAS
+======================================================================
+
+US-013 — Busqueda de productos
+ESTADO: HECHA
+Como visitante o comprador, quiero buscar productos por palabras clave, para
+encontrar articulos de mi interes.
+Criterios de aceptacion:
+- La busqueda considera nombre, descripcion y categoria, unicamente en
+  productos aprobados.
+- Si no hay coincidencias, se informa y se permite modificar la busqueda.
+
+US-014 — Busqueda de vendedores
+ESTADO: HECHA COMO BUSQUEDA DE EMPRENDIMIENTOS
+Como comprador, quiero buscar vendedores por su nombre o informacion
+comercial, para encontrar sus perfiles y productos.
+Criterios de aceptacion:
+- La busqueda devuelve perfiles de vendedores que coinciden con el termino.
+- Cada resultado lleva al perfil publico y muestra solo sus productos
+  aprobados.
+- Cuando no hay coincidencias, se informa sin exponer datos privados.
+Alcance actual: la pagina /emprendimientos busca nombre, descripcion y
+ubicacion de tiendas activas; cada resultado abre su perfil y catalogo.
+
+US-015 — Filtros por categoria
+ESTADO: HECHA
+Como comprador, quiero filtrar productos por categoria, para encontrar
+articulos especificos.
+Criterios de aceptacion:
+- Al elegir una categoria se muestran productos aprobados de esa categoria.
+- La categoria se puede combinar con busqueda, orden y rango de precios.
+
+US-016 — Ordenamiento de productos
+ESTADO: PARCIAL
+Como comprador, quiero ordenar los resultados, para comparar productos.
+Alcance actual: el catalogo ofrece recientes, A-Z, menor precio y mayor precio.
+Falta "mas vendidos".
+Criterios de aceptacion:
+- Cada criterio disponible devuelve resultados en el orden indicado.
+- "Mas vendidos" ordena por unidades vendidas usando un periodo y estados de
+  compra definidos y consistentes.
+Decision necesaria: definir si el ranking considera todos los tiempos o un
+periodo (por ejemplo, ultimos 30 dias) y si cuenta pedidos pagados, enviados o
+entregados. No mostrar un ranking ficticio si no hay una definicion acordada.
+
+US-017 — Ofertas vigentes
+ESTADO: HECHA — MIGRACION Y FLUJOS PRINCIPALES VALIDADOS
+Como comprador, quiero consultar ofertas vigentes, para encontrar productos
+promocionados y conocer su precio actual.
+Alcance actual: migracion 018 aplicada en la base local. El vendedor propone
+precio y vigencia; administracion aprueba o rechaza con motivo. Catalogo,
+detalle, favoritos, carrito y checkout calculan el precio vigente; el pedido
+conserva el precio aplicado como snapshot. Las fechas se interpretan en
+APP_TIMEZONE y se guardan/comparan en UTC para evitar diferencias entre PHP y
+MySQL. El vendedor puede desactivar una oferta y las ofertas vencidas dejan de
+aplicarse.
+Criterios de aceptacion:
+- Una oferta activa muestra precio original, precio promocional y vigencia.
+- Una oferta vencida o desactivada deja de mostrarse como vigente y no cambia
+  el precio cobrado.
+- El precio y las fechas se validan en el servidor al agregar y confirmar el
+  pedido.
+DECISION CONFIRMADA: el vendedor propone un precio menor al regular y fechas de
+vigencia; la oferta solo se muestra despues de aprobacion administrativa. No se
+inventan descuentos minimos/maximos. Validado de extremo a extremo: propuesta,
+aprobacion, rechazo con motivo, aplicacion del precio en checkout, snapshot de
+compra y reserva de stock; tambien se probaron ofertas vencidas/no aprobadas.
+Aplicar la migracion 018 en cada entorno adicional al desplegar.
+
+======================================================================
+GRUPO 5 — CARRITO Y COMPRAS
+======================================================================
+
+US-018 — Agregar productos al carrito
+ESTADO: HECHA
+Como comprador, quiero agregar productos al carrito, para reunir los articulos
+que deseo comprar.
+Criterios de aceptacion:
+- Solo se agrega un producto aprobado, con stock suficiente y respetando la
+  cantidad minima.
+- No se permite comprar publicaciones propias.
+- Se vuelve a validar el stock al confirmar el pedido.
+
+US-019 — Modificar el carrito
+ESTADO: HECHA
+Como comprador, quiero modificar o quitar productos del carrito, para ajustar
+mi seleccion.
+Criterios de aceptacion:
+- Al actualizar la cantidad, se validan stock y minimo de compra.
+- Al quitar un articulo, se elimina del carrito propio.
+- Los importes se recalculan con los precios vigentes mostrados por el sitio.
+
+US-020 — Consultar el carrito con detalle visual
+ESTADO: HECHA
+Como comprador, quiero revisar el contenido de mi carrito, para verificar mi
+compra antes de continuar.
+Alcance actual: cada linea incluye la imagen del producto o un marcador visual
+si no hay imagen.
+Criterios de aceptacion:
+- Cada linea muestra imagen, producto, cantidad, precio unitario y subtotal.
+- El resumen muestra el total de productos y el importe actualizado.
+- Un carrito vacio presenta un mensaje y un enlace al catalogo.
+- Los articulos no disponibles se identifican y no permiten confirmar el
+  pedido.
+
+======================================================================
+GRUPO 6 — CHAT Y COMUNICACION
+======================================================================
+
+US-021 — Chat entre comprador y vendedor
+ESTADO: HECHA
+Como comprador, quiero conversar con un vendedor, para consultar sobre sus
+productos.
+Criterios de aceptacion:
+- Un comprador puede iniciar una conversacion asociada a un vendedor y,
+  opcionalmente, a un producto.
+- Los participantes pueden enviar mensajes y consultar el historial propio.
+- Ningun otro usuario puede consultar o enviar mensajes a esa conversacion.
+- Los mensajes se almacenan de forma persistente y se validan en el servidor.
+DECISION CONFIRMADA: chat persistente en base de datos con actualizacion
+periodica; no se requiere WebSocket en la primera version.
+Alcance actual: inicio desde perfiles de emprendimiento o productos, envio e
+historial persistentes, consulta periodica cada 5 segundos y control de
+participantes.
+
+US-022 — Administracion de conversaciones
+ESTADO: HECHA
+Como vendedor, quiero organizar y responder las conversaciones de mis
+compradores, para atender sus consultas.
+Criterios de aceptacion:
+- El vendedor ve conversaciones de las que es participante y puede responder.
+- Las conversaciones permiten distinguir mensajes nuevos de los ya leidos.
+- No se muestran conversaciones ni datos de otros vendedores.
+Dependencia: US-021.
+Alcance actual: comprador y vendedor ven solo sus conversaciones; la bandeja
+muestra mensajes sin leer y protege las rutas por participante.
+
+======================================================================
+GRUPO 7 — INTERFAZ Y NAVEGACION
+======================================================================
+
+US-023 — Diseno responsivo
+ESTADO: HECHA — VALIDACION VISUAL Y RESPONSIVE
+Como usuario, quiero que la plataforma se adapte a distintos dispositivos,
+para utilizarla comodamente.
+Alcance actual: hay estilos responsivos para anchos de pantalla reducidos.
+Criterios de aceptacion:
+- En celular, tableta y computadora, el contenido y las acciones principales
+  caben en pantalla y se pueden utilizar.
+- Formularios, catalogo, carrito, menus y panel de administracion siguen siendo
+  legibles y accesibles con teclado.
+Validado con navegador en 375, 768, 860 y 1440 px para portada, detalle,
+carrito, formulario de publicacion, login, emprendimientos y panel. No se
+detecta desbordamiento horizontal; el menu movil se abre y muestra sus enlaces.
+Se corrigio el breakpoint del encabezado (860 px) que desbordaba a 768 px.
+
+US-024 — Navegacion movil compacta
+ESTADO: HECHA
+Como usuario, quiero una navegacion compacta en pantallas pequenas, para
+acceder facilmente a las secciones.
+Alcance actual: la navegacion movil tiene un menu desplegable general, separado
+de la navegacion de escritorio.
+Criterios de aceptacion:
+- En pantalla pequena existe un control claro para abrir y cerrar la
+  navegacion.
+- Las opciones se muestran segun la sesion y las funciones disponibles.
+- El control funciona con teclado y comunica su estado a tecnologias de
+  asistencia.
+
+US-025 — Accesos a secciones personales
+ESTADO: HECHA CON AJUSTE DE NOMENCLATURA
+Como usuario autenticado, quiero acceder a mis productos, ventas, compras,
+favoritos, notificaciones y perfil, para administrar mi actividad.
+Alcance actual: el menu de cuenta contiene esos accesos; la opcion se llama
+"Mi perfil" y las ventas/productos pertenecen a la cuenta vendedora.
+Criterios de aceptacion:
+- Las opciones personales solo aparecen para usuarios autenticados.
+- Las rutas protegidas verifican la sesion y la propiedad de los recursos.
+- El menu permite acceder a los emprendimientos propios y sus publicaciones.
+
+US-026 — Retiro de Overshine Contacts
+ESTADO: HECHA
+Como usuario, quiero que se retiren los accesos a Overshine Contacts, para
+simplificar la navegacion de Emprendi.
+Alcance actual: no se encontraron referencias activas a Contacts en la
+navegacion de Emprendi; hay un directorio contacts independiente fuera del
+directorio publico servido por esta aplicacion.
+Criterios de aceptacion:
+- La aplicacion activa no muestra enlaces, textos ni componentes de Overshine
+  Contacts.
+- La eliminacion de una referencia no rompe otra funcionalidad de Emprendi.
+- La frase original "el chat continua disponible" solo se podra aceptar cuando
+  US-021 y US-022 esten implementadas.
+Actualizacion: el chat propio de Emprendi esta implementado y no depende del
+directorio Contacts.
+
+======================================================================
+GRUPO 8 — INFORMACION Y SOPORTE
+======================================================================
+
+US-027 — Seccion "Nosotros" de Emprendi
+ESTADO: HECHA
+Como visitante, quiero conocer el proposito de Emprendi, para comprender la
+plataforma y a quienes esta dirigida.
+Criterios de aceptacion:
+- La seccion presenta informacion institucional real y la explicacion del
+  proyecto Emprendi.
+- La informacion no conserva nombres o descripciones de Overshine que no
+  correspondan al producto actual.
+- El contenido es legible en dispositivos moviles.
+Alcance actual: pagina disponible en /nosotros y enlazada desde la navegacion.
+
+US-028 — Ayuda y soporte
+ESTADO: HECHA CON CONTACTO CONFIGURABLE
+Como usuario, quiero consultar recursos de ayuda, para resolver dudas sobre
+el uso de Emprendi.
+Criterios de aceptacion:
+- La seccion incluye respuestas claras a las preguntas frecuentes del sitio.
+- Si la ayuda no resuelve el problema, muestra un canal de contacto valido.
+- El canal y las instrucciones no exponen direcciones o datos personales sin
+  autorizacion.
+DECISION CONFIRMADA: preparar la seccion y hacer configurable el canal de
+soporte; no publicar un correo o contacto ficticio.
+Alcance actual: pagina disponible en /ayuda con preguntas frecuentes; solo se
+muestra un correo si SUPPORT_EMAIL contiene una direccion valida.
+
+======================================================================
+GRUPO 9 — REPUTACION Y RENDIMIENTO COMERCIAL
+======================================================================
+
+US-029 — Indicadores de reputacion del vendedor
+ESTADO: PENDIENTE — CRITERIOS POR DEFINIR
+Como comprador, quiero ver indicadores de reputacion del vendedor, para contar
+con mas informacion al elegir.
+Alcance actual: se muestran opiniones verificadas del vendedor; no hay
+etiquetas por volumen de ventas o trayectoria.
+Criterios de aceptacion:
+- Las etiquetas se basan en reglas publicadas y calculables a partir de datos
+  verificables.
+- Solo cuentan pedidos que alcanzaron el estado de finalizacion definido.
+- El perfil explica el significado de cada etiqueta y no promete garantias.
+DECISION CONFIRMADA: para metricas comerciales contar pedidos pagados y
+entregados segun cada metrica; no crear etiquetas de reputacion hasta que se
+definan umbrales de ventas, antiguedad y calificacion.
+
+US-030 — Opiniones verificadas de productos y vendedores
+ESTADO: HECHA CON ALCANCE ACTUAL
+Como comprador, quiero dejar una opinion despues de recibir un producto, para
+compartir mi experiencia de compra.
+Alcance actual: se permite una opinion por articulo de un pedido entregado;
+incluye puntuacion y comentario, y se muestra el promedio en el producto y el
+perfil del vendedor. No es una calificacion independiente de un emprendimiento.
+Criterios de aceptacion:
+- Solo el comprador de un pedido entregado puede opinar sobre el articulo.
+- No se permite duplicar una opinion para el mismo articulo del pedido.
+- La puntuacion y el comentario se validan y el promedio se actualiza a partir
+  de opiniones verificadas.
+
+US-031 — Panel de rendimiento del vendedor
+ESTADO: HECHA — TOTALES HISTORICOS
+Como vendedor, quiero consultar las estadisticas de mis ventas y productos,
+para conocer el rendimiento de mi cuenta.
+Criterios de aceptacion:
+- El panel presenta metricas con periodo y definiciones comprensibles.
+- Los resultados incluyen unicamente datos de la cuenta autenticada.
+- Se definen con precision estados de compra y formulas antes de presentar
+  importes como ingresos o ventas completadas.
+Alcance actual: muestra pedidos y unidades pagados, pedidos entregados,
+importe bruto de productos pagados (sin envio), productos aprobados visibles
+y seguidores unicos. El periodo es todo el historial; solo cuenta
+estado_pago=aprobado y entrega con estado=entregado.
+DECISION CONFIRMADA: no inventar etiquetas ni umbrales de reputacion.
+
+US-032 — Seguir vendedores
+ESTADO: HECHA COMO SEGUIMIENTO DE EMPRENDIMIENTOS
+Como comprador, quiero seguir o dejar de seguir vendedores, para encontrar
+facilmente los perfiles que me interesan.
+Alcance actual: se pueden guardar productos en favoritos, pero no seguir
+vendedores.
+Criterios de aceptacion:
+- Un usuario autenticado puede seguir y dejar de seguir un perfil de vendedor.
+- La relacion no se duplica y el contador coincide con los seguidores reales.
+- Los vendedores no pueden manipular el contador mediante solicitudes
+  directas.
+Alcance actual: la relacion unica es por cuenta y emprendimiento; se puede
+seguir, dejar de seguir y consultar la lista propia. El panel cuenta seguidores
+unicos a traves de todas las tiendas de la cuenta.
+
+======================================================================
+GRUPO 10 — ADMINISTRACION Y MODERACION
+======================================================================
+
+US-033 — Acceso al panel administrativo
+ESTADO: HECHA — PIN COMPARTIDO Y CSRF
+Como administrador, quiero acceder al panel protegido por el PIN
+administrativo, para supervisar la plataforma.
+Alcance actual: el panel utiliza un PIN compartido configurado en el entorno;
+no hay rol administrativo individual de usuario.
+Criterios de aceptacion:
+- Solo quien conoce el PIN configurado puede acceder a operaciones del panel.
+- Las operaciones administrativas comprueban la sesion de administracion en
+  el servidor y protegen formularios contra CSRF.
+- Las acciones quedan registradas como realizadas mediante el PIN compartido;
+  no se debe atribuir una identidad individual que el sistema no conoce.
+DECISION CONFIRMADA: conservar el PIN compartido. Se documentara la limitacion
+de auditoria; no se afirmara que el registro identifica a una persona concreta.
+Validado: inicio de sesion administrativa, consulta protegida de auditoria y
+redireccion de una sesion no autorizada. Las rutas administrativas de cambio
+comprueban la sesion y el token CSRF.
+
+US-034 — Gestion de reportes e irregularidades
+ESTADO: HECHA — REPORTES DE PRODUCTOS Y CUENTAS
+Como administrador, quiero revisar reportes pendientes de publicaciones, para
+investigar incumplimientos.
+Alcance actual: compradores pueden reportar productos y cuentas; el panel
+permite revisar y descartar reportes, retirar publicaciones o bloquear cuentas.
+La migracion 019 crea la cola de reportes de cuentas.
+Criterios de aceptacion:
+- El panel muestra cada reporte pendiente, motivo, detalle y fecha.
+- El administrador puede descartar el reporte o tomar una medida disponible.
+- La decision actualiza el estado del reporte y registra la accion.
+- Cuando no hay casos pendientes, se informa claramente.
+Alcance inicial propuesto: reportes de productos y cuentas de usuario. Los
+emprendimientos separados no aplican salvo que se apruebe US-007.
+Validado: la cola muestra y resuelve un reporte de cuenta; el bloqueo, el
+estado del reporte y el evento de auditoria se guardan juntos.
+
+US-035 — Moderacion de productos
+ESTADO: HECHA — DECISIONES AUDITADAS
+Como administrador, quiero aprobar, rechazar o retirar productos, para
+mantener un catalogo confiable.
+Alcance actual: se pueden aprobar o rechazar publicaciones pendientes con
+motivo; tambien retirar publicaciones mediante gestion de reportes.
+Criterios de aceptacion:
+- Una publicacion pendiente puede aprobarse o rechazarse con un cambio de
+  estado valido.
+- Una publicacion aprobada puede retirarse y deja de estar disponible para
+  compradores.
+- Las decisiones y sus motivos quedan registradas con actor y fecha.
+- Solo administradores autorizados pueden ejecutar estas operaciones.
+Las aprobaciones, rechazos y retiros por reporte registran accion, entidad,
+actor y fecha; el rechazo y el retiro requieren motivo. Solo se cambian
+publicaciones en estados compatibles con la decision.
+
+US-036 — Moderacion de cuentas de usuario
+ESTADO: HECHA — MOTIVOS, AUDITORIA Y ANONIMIZACION
+Como administrador, quiero moderar cuentas de usuarios vendedores, para
+intervenir ante incumplimientos.
+Alcance actual: el panel permite editar, bloquear, desbloquear y anonimizar/
+eliminar una cuenta; no gestiona emprendimientos independientes.
+Criterios de aceptacion:
+- Un administrador autorizado puede bloquear y reactivar una cuenta.
+- Una cuenta bloqueada no puede iniciar sesion ni realizar operaciones.
+- La eliminacion protege el historial comercial y elimina o anonimiza los
+  datos personales segun la politica definida.
+- Las medidas, el motivo, el actor y la fecha quedan registrados.
+Bloquear, reactivar y eliminar requiere un motivo de 10 a 500 caracteres y
+registra la accion atomicamente. Las cuentas bloqueadas no pueden iniciar
+sesion y las sesiones existentes pierden acceso. Al eliminar se anonimiza el
+perfil, se retiran productos, se desactivan tiendas y se conservan pedidos y
+articulos historicos. Validado con cuenta de prueba temporal.
+
+US-037 — Acceso administrativo auditado a conversaciones
+ESTADO: HECHA CON ACCESO AUDITADO
+Como administrador expresamente autorizado, quiero consultar una conversacion
+por un motivo justificado, para investigar un reporte.
+Criterios de aceptacion:
+- El acceso requiere permiso y motivo asociado a un caso concreto.
+- Se registra administrador, conversacion, motivo y fecha de acceso.
+- Los accesos y mensajes no se exponen a otros usuarios.
+DECISION CONFIRMADA: el administrador puede ver contenido solo despues de
+indicar un motivo de al menos 20 caracteres. El listado administrativo no
+muestra mensajes; cada acceso requiere sesion PIN, queda auditado con motivo y
+huella de sesion, y habilita una sola consulta. La auditoria atribuye la accion
+al PIN compartido, no a una persona concreta.
+
+US-038 — Consulta administrativa del historial de compras
+ESTADO: HECHA — FLUJO Y AUDITORIA VALIDADOS
+Como administrador autorizado, quiero consultar compras y sus estados, para
+investigar operaciones y ayudar a resolver reclamos.
+Alcance actual: consulta administrativa por identificador con motivo de al
+menos 20 caracteres, auditoria antes de mostrar los datos y datos limitados a
+la compra y sus articulos. Validado con sesion administrativa: consulta exitosa
+y registro en auditoria; la ruta sin autenticacion redirige al acceso
+administrativo.
+Criterios de aceptacion:
+- El administrador autorizado puede localizar una compra y consultar estados,
+  articulos, pago y envio necesarios para una investigacion.
+- La consulta administrativa no permite modificar el historial comercial.
+- Los datos personales se limitan a lo necesario y el acceso queda auditado.
+- Los usuarios sin permiso reciben acceso denegado.
+
+US-039 — Historial de actividad administrativa y comercial
+ESTADO: HECHA — CONSULTA FILTRABLE
+Como administrador autorizado, quiero consultar acciones relevantes, para
+auditar cambios y reconstruir lo ocurrido.
+Alcance actual: se registran acciones comerciales, moderacion, reportes,
+consultas administrativas de compras/conversaciones y cambios de cuenta.
+`/admin/auditoria` permite filtrar por fechas, actor, entidad y accion y muestra
+hasta 200 resultados. Los usuarios se identifican como `usuario:ID`; el PIN
+administrativo queda identificado como compartido.
+Criterios de aceptacion:
+- Se registran acciones relevantes con actor, fecha, entidad, identificador y
+  detalle no sensible.
+- Un administrador autorizado puede filtrar el historial por fecha, actor,
+  entidad y accion.
+- Los registros no se pueden alterar desde funciones ordinarias del sitio.
+- No se guardan contrasenas, tokens ni secretos en el historial.
+Validado el acceso protegido, los filtros y el registro de cambios de estado,
+eliminacion y moderacion. No se guardan contrasenas, tokens ni credenciales.
+
+======================================================================
+GRUPO 11 — SEGURIDAD TRANSVERSAL
+======================================================================
+
+US-040 — Control de permisos y propiedad de recursos
+ESTADO: PARCIAL — P0
+Como responsable de la plataforma, quiero validar permisos en el servidor en
+cada operacion protegida, para impedir accesos no autorizados.
+Alcance actual: existen sesiones, tokens CSRF en formularios y controles de
+propiedad en varios flujos; las funciones administrativas usan PIN compartido.
+Criterios de aceptacion:
+- Cada ruta protegida verifica sesion, rol y propiedad del recurso en el
+  servidor; ocultar un boton no se considera control de acceso.
+- Un usuario no puede leer, editar o eliminar datos de otra cuenta manipulando
+  identificadores.
+- Las operaciones que cambian estado requieren metodo y proteccion CSRF
+  adecuados.
+- Los fallos de permisos se rechazan sin revelar datos privados y se registran
+  cuando son relevantes para seguridad.
+Trabajo pendiente: terminar la matriz de permisos y probar intentos de acceso
+cruzado en todas las rutas protegidas.
+DECISION CONFIRMADA: se conserva el PIN administrativo compartido; no se
+implementaran cuentas administrativas individuales sin una nueva decision.
+
+======================================================================
+DEPENDENCIAS Y SECUENCIA RECOMENDADA
+======================================================================
+1. US-033 y US-040: definir y consolidar identidad/roles y autorizacion
+   administrativa antes de ampliar operaciones de administracion.
+2. US-035, US-036 y US-039: unificar moderacion y auditoria con actor,
+   decision, motivo y fecha.
+3. US-003: acordar proveedor/canal de correo y configurar secretos solo en el
+   entorno antes de habilitar recuperacion.
+4. US-014, US-020, US-024, US-027 y US-028: mejoras de experiencia sin
+   dependencias fuertes de nuevas entidades.
+5. US-029: definir los umbrales de reputacion antes de presentar etiquetas.
+6. US-021, US-022 y US-037: mantener las reglas de privacidad y auditoria
+   confirmadas al ampliar el chat administrativo.
+7. US-007: validar que las futuras ampliaciones mantengan aislamiento por
+   tienda y permisos cruzados.
+
+NOTAS PARA CREAR ISSUES
+- Crear un issue por US, usando el identificador original (US-001 a US-040)
+  para mantener correspondencia con el documento recibido.
+- Para historias HECHAS, crear issues de documentacion/cierre y marcarlas como
+  completadas solo despues de validar el flujo en la aplicacion.
+- Para historias PARCIALES, describir por separado la funcionalidad existente
+  y los criterios pendientes de completar.
+- US-007, US-017, US-037 y US-038 tienen sus flujos principales implementados y
+  validados; crear/cerrar las issues de seguimiento correspondientes.
+- No incluir credenciales, correos privados, datos de usuarios ni contenidos
+  de .env en issues publicos.

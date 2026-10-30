@@ -39,11 +39,44 @@ function productCategories(): array
 function catalogOrderBy(string $sort): string
 {
   return match ($sort) {
-    'precio_asc' => ' ORDER BY precio ASC, id DESC',
-    'precio_desc' => ' ORDER BY precio DESC, id DESC',
+    'precio_asc' => ' ORDER BY ' . currentProductPriceSql('p') . ' ASC, p.id DESC',
+    'precio_desc' => ' ORDER BY ' . currentProductPriceSql('p') . ' DESC, p.id DESC',
     'nombre' => ' ORDER BY nombre ASC, id DESC',
     default => ' ORDER BY creado_en DESC, id DESC',
   };
+}
+
+function productOfferActiveSql(string $alias = 'p'): string
+{
+  return "({$alias}.oferta_estado = 'aprobada' AND {$alias}.oferta_precio IS NOT NULL AND {$alias}.oferta_inicio <= UTC_TIMESTAMP() AND {$alias}.oferta_fin > UTC_TIMESTAMP() AND {$alias}.oferta_precio < {$alias}.precio)";
+}
+
+function currentProductPriceSql(string $alias = 'p'): string
+{
+  return 'CASE WHEN ' . productOfferActiveSql($alias) . " THEN {$alias}.oferta_precio ELSE {$alias}.precio END";
+}
+
+function productOfferTimezone(): DateTimeZone
+{
+  return new DateTimeZone((string) ($_ENV['APP_TIMEZONE'] ?? 'America/Argentina/Buenos_Aires'));
+}
+
+function formatProductOfferDate(mixed $date): string
+{
+  if (!is_string($date) || $date === '') {
+    return '';
+  }
+
+  $utcDate = DateTimeImmutable::createFromFormat(
+    '!Y-m-d H:i:s',
+    $date,
+    new DateTimeZone('UTC')
+  );
+  if ($utcDate === false) {
+    throw new InvalidArgumentException('La fecha de oferta almacenada no es válida.');
+  }
+
+  return $utcDate->setTimezone(productOfferTimezone())->format('d/m/Y H:i');
 }
 
 /**

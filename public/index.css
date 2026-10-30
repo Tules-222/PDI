@@ -110,6 +110,10 @@ summary {
   margin-left: auto;
 }
 
+.mobile-navigation {
+  display: none;
+}
+
 .nav-link-primary {
   padding: 10px 14px;
   color: var(--white);
@@ -1137,10 +1141,56 @@ h2 {
 
 .cart-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: 88px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 18px;
   padding: 18px;
+}
+
+.cart-item-image,
+.cart-item-image-placeholder {
+  width: 88px;
+  height: 88px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: linear-gradient(135deg, #e2f0fa, #f5f9fd);
+}
+
+.cart-item-image-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.help-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.help-list section,
+.help-contact {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.help-list h2,
+.help-contact h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.help-list p,
+.help-contact p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.help-contact {
+  margin-top: 20px;
 }
 
 .cart-item h2,
@@ -1267,17 +1317,77 @@ th {
   border: 0;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 860px) {
   .site-header-inner {
     flex-wrap: wrap;
     gap: 12px;
     padding: 12px 16px;
   }
 
-  .site-actions {
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: 10px;
+  .desktop-actions {
+    display: none;
+  }
+
+  .mobile-navigation {
+    display: block;
+    position: relative;
+    margin-left: auto;
+  }
+
+  .mobile-navigation > summary {
+    display: block;
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--navy);
+    font-weight: 700;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .mobile-navigation > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .mobile-navigation > summary::before {
+    margin-right: 7px;
+    content: "☰";
+  }
+
+  .mobile-navigation[open] > .mobile-navigation-panel {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 6;
+    display: grid;
+    min-width: 220px;
+    gap: 4px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--white);
+    box-shadow: var(--shadow);
+  }
+
+  .mobile-navigation-panel a,
+  .mobile-navigation-panel button {
+    padding: 10px;
+    color: var(--navy);
+    text-align: left;
+    text-decoration: none;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  .mobile-navigation-panel a:hover,
+  .mobile-navigation-panel button:hover {
+    background: var(--blue-pale);
+  }
+
+  .mobile-navigation-panel form {
+    display: grid;
   }
 
   .nav-link {
@@ -1330,11 +1440,22 @@ th {
   }
 
   .cart-item {
-    grid-template-columns: 1fr 92px;
+    grid-template-columns: 64px minmax(0, 1fr) 92px;
+    gap: 10px;
+  }
+
+  .cart-item-image,
+  .cart-item-image-placeholder {
+    width: 64px;
+    height: 64px;
+  }
+
+  .cart-item-details {
+    grid-column: 2 / -1;
   }
 
   .cart-item > form:last-child {
-    grid-column: 2;
+    grid-column: 3;
     justify-self: end;
   }
 }
@@ -1344,18 +1465,8 @@ th {
     align-items: flex-start;
   }
 
-  .site-actions {
-    width: 100%;
-    justify-content: space-between;
-    margin-left: 0;
-  }
-
   .home-link {
-    margin-left: auto;
-  }
-
-  .nav-link {
-    padding: 8px 0;
+    margin-left: 0;
   }
 
   .nav-link-primary {
@@ -1408,4 +1519,162 @@ th {
     color: var(--muted);
     font-size: 12px;
   }
+}
+
+.conversation-list,
+.admin-conversation-list {
+  display: grid;
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.conversation-card,
+.admin-conversation-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 18px;
+  padding: 18px;
+}
+
+.conversation-card h2,
+.admin-conversation-card h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.conversation-card p,
+.admin-conversation-card p {
+  margin: 5px 0;
+  color: var(--muted);
+}
+
+.conversation-preview {
+  overflow: hidden;
+  max-width: 720px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.conversation-meta {
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.conversation-unread {
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: var(--navy);
+  background: var(--blue-pale);
+  font-weight: 700;
+}
+
+.conversation-privacy-note {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.chat-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 55vh;
+  min-height: 160px;
+  overflow-y: auto;
+  margin: 20px 0;
+  padding: 14px;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #f7fafc;
+}
+
+.chat-message {
+  align-self: flex-start;
+  max-width: min(85%, 620px);
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px 10px 10px 2px;
+  background: var(--white);
+}
+
+.chat-message-mine {
+  align-self: flex-end;
+  border-radius: 10px 10px 2px 10px;
+  background: var(--blue-pale);
+}
+
+.chat-message p {
+  margin: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.chat-message time {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.admin-chat-messages .chat-message {
+  max-width: 100%;
+}
+
+.admin-conversation-card .stacked-form {
+  width: min(100%, 520px);
+}
+
+@media (max-width: 760px) {
+  .conversation-card,
+  .admin-conversation-card {
+    grid-template-columns: 1fr;
+  }
+
+  .conversation-meta {
+    justify-items: start;
+  }
+
+  .chat-message {
+    max-width: 95%;
+  }
+}
+
+.store-follow-count {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 16px;
+  margin-top: 24px;
+}
+
+.metric-card {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 18px;
+}
+
+.metric-card > span {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.metric-card > strong {
+  color: var(--navy);
+  font-size: 28px;
+}
+
+.metric-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
 }

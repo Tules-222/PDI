@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 $producto = $producto ?? [];
 $error = $error ?? null;
+$emprendimientos = $emprendimientos ?? [];
+$emprendimientoId = (string) ($emprendimientoId ?? $producto['emprendimiento_id'] ?? '');
 ?>
 <main class="page-content narrow-content">
   <a class="back-link" href="/">← Volver al inicio</a>
@@ -14,6 +16,15 @@ $error = $error ?? null;
     <?php if (!empty($producto['motivo_revision'])): ?><p class="notice notice-review">Motivo de revisión: <?= html((string) $producto['motivo_revision']) ?></p><?php endif; ?>
     <form class="stacked-form" action="/productos/<?= rawurlencode((string) ($producto['id'] ?? '')) ?>/actualizar" method="post" enctype="multipart/form-data">
       <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
+      <div class="form-field">
+        <label for="emprendimiento_id">Emprendimiento</label>
+        <select id="emprendimiento_id" name="emprendimiento_id" required>
+          <option value="">Elegí dónde publicar</option>
+          <?php foreach ($emprendimientos as $emprendimiento): ?>
+            <option value="<?= html((string) $emprendimiento['id']) ?>" <?= $emprendimientoId === (string) $emprendimiento['id'] ? 'selected' : '' ?>><?= html((string) $emprendimiento['nombre']) ?></option>
+          <?php endforeach; ?>
+        </select>
+      </div>
       <div class="form-field">
         <label for="nombre">Nombre del producto</label>
         <input id="nombre" name="nombre" type="text" minlength="3" maxlength="255" value="<?= html((string) ($producto['nombre'] ?? '')) ?>" required>

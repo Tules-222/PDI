@@ -43,7 +43,11 @@ $hasUnavailableItems = $hasUnavailableItems ?? true;
       </div>
       <h2>Productos</h2>
       <?php foreach ($items as $item): ?>
-        <p><?= html((string) $item['nombre']) ?> × <?= html((string) $item['cantidad']) ?> — $<?= html(number_format((float) $item['precio'] * (int) $item['cantidad'], 2, ',', '.')) ?></p>
+        <p>
+          <?= html((string) $item['nombre']) ?> × <?= html((string) $item['cantidad']) ?> —
+          <?php if (!empty($item['oferta_vigente'])): ?><del>$<?= html(number_format((float) $item['precio_original'] * (int) $item['cantidad'], 2, ',', '.')) ?></del><?php endif; ?>
+          $<?= html(number_format((float) $item['precio'] * (int) $item['cantidad'], 2, ',', '.')) ?>
+        </p>
       <?php endforeach; ?>
       <p class="summary-total">Subtotal de productos: $<?= html(number_format((float) $total, 2, ',', '.')) ?></p>
       <p class="notice notice-review">El stock se reserva al confirmar. No se realizará un cobro hasta que el vendedor cotice el envío y el pago esté habilitado.</p>

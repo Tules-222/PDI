@@ -50,6 +50,7 @@ Las cuentas se registran con el rol fijo `usuario` y una contraseña. Cada
 usuario puede administrar sus propias publicaciones; el catálogo muestra
 únicamente productos aprobados. Las publicaciones nuevas y las que se editan
 quedan pendientes hasta que un administrador las revise en `/admin`.
+Las contraseñas nuevas deben tener entre 8 y 72 bytes.
 El panel usa el PIN compartido configurado como `ADMIN_PIN` en `.env`; cualquier
 persona que conozca ese PIN puede revisar productos y gestionar cuentas. Desde
 el panel se pueden editar datos de usuarios, bloquear o desbloquear el acceso y
@@ -57,6 +58,13 @@ eliminar cuentas. Al eliminar una cuenta se anonimiza la información personal,
 se retiran sus productos del catálogo y se conserva el historial de pedidos.
 Al rechazar una publicación, el administrador debe indicar el motivo, que el
 vendedor verá en “Mis productos”.
+
+Los usuarios autenticados pueden reportar publicaciones y perfiles comerciales.
+El panel permite revisar los reportes, descartar casos, retirar publicaciones
+o bloquear cuentas con un motivo. `/admin/auditoria` muestra acciones
+administrativas y comerciales con filtros por fecha, actor, entidad y acción.
+El registro identifica al PIN como compartido y a las cuentas como `usuario:ID`;
+no atribuye acciones a una persona que el sistema no identifica.
 
 Cada producto requiere categoría, precio válido, descripción de al menos 30
 caracteres y cuatro palabras, confirmación de que es real y al menos una imagen
@@ -98,8 +106,42 @@ sus propios cargos por procesamiento.
 Si no están configuradas las credenciales de Mercado Pago o una URL HTTPS
 pública, el sitio informa que el pago está deshabilitado y no simula cobros.
 
+Las conversaciones se guardan en la base de datos y se actualizan cada cinco
+segundos; solo comprador y vendedor participantes pueden responder. El panel
+administrativo no muestra su contenido en el listado: para abrir una
+conversación exige un motivo y registra el acceso. Como el panel usa un PIN
+compartido, el registro no identifica a una persona concreta. El perfil de cada
+emprendimiento permite seguirlo y consultar los emprendimientos seguidos.
+`/mi-rendimiento` muestra totales históricos; solo cuenta pagos aprobados y
+marca como entregados los pedidos con ese estado. El importe bruto suma
+productos y excluye el costo de envío.
+
 Si PHP rechaza archivos antes de llegar a la aplicación, revisá `php.ini` y
 configurá `upload_max_filesize=5M`, `post_max_size=26M` y `max_file_uploads=5`.
+
+La sección `/ayuda` muestra el correo de soporte solo si `SUPPORT_EMAIL` está
+configurado con una dirección válida en `.env`; si se deja vacío, no inventa un
+contacto. `/nosotros` presenta información institucional de Emprendi.
+
+Cada cuenta tiene al menos un emprendimiento, creado al registrarse o al
+aplicar la migración correspondiente. Se pueden crear varias tiendas y asociar
+cada producto a una de ellas. Pausar una tienda oculta sus productos del
+catálogo y evita nuevas compras; los pedidos guardan el nombre de la tienda
+como referencia histórica.
+
+Los vendedores pueden proponer ofertas con precio y fechas de vigencia desde
+"Mis productos". La oferta solo se publica después de la aprobación
+administrativa; el precio promocional se aplica en el catálogo, carrito y
+pedido únicamente durante el período aprobado. Aplicá la migración con
+`composer run-script migrate` en cada entorno para habilitar estos campos.
+Las fechas ingresadas se interpretan en `APP_TIMEZONE` (por defecto,
+`America/Argentina/Buenos_Aires`) y se almacenan en UTC para que la vigencia no
+dependa de la zona horaria del servidor MySQL.
+
+La recuperación de contraseña permanece deshabilitada hasta configurar
+`APP_URL` y las variables `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`,
+`SMTP_PASSWORD`, `SMTP_ENCRYPTION` (`tls` o `ssl`) y `SMTP_FROM_EMAIL`.
+Cuando está habilitada, los enlaces son de un solo uso y vencen en una hora.
 
 ## Migraciones
 

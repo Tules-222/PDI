@@ -49,11 +49,11 @@ $formData = $formData ?? [];
 				</div>
 				<div class="form-field">
 					<label for="password">Contraseña</label>
-					<input id="password" name="password" type="password" minlength="8" autocomplete="new-password" required>
+					<input id="password" name="password" type="password" minlength="8" maxlength="72" autocomplete="new-password" required>
 				</div>
 				<div class="form-field">
 					<label for="password_confirmation">Repetir contraseña</label>
-					<input id="password_confirmation" name="password_confirmation" type="password" minlength="8" autocomplete="new-password" required>
+					<input id="password_confirmation" name="password_confirmation" type="password" minlength="8" maxlength="72" autocomplete="new-password" required>
 				</div>
 			</div>
 			<button class="button button-primary button-wide" type="submit">Crear cuenta</button>

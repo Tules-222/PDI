@@ -49,7 +49,7 @@ $error = $error ?? null;
 				</div>
 				<div class="form-field form-field-full">
 					<label for="password">Nueva contraseña (opcional)</label>
-					<input id="password" name="password" type="password" minlength="8" autocomplete="new-password">
+					<input id="password" name="password" type="password" minlength="8" maxlength="72" autocomplete="new-password">
 				</div>
 			</div>
 			<button class="button button-primary button-wide" type="submit">Guardar cambios</button>

@@ -29,6 +29,7 @@ $returnTo = $returnTo ?? '/';
 			</div>
 			<button class="button button-primary button-wide" type="submit">Ingresar</button>
 		</form>
+		<p class="form-footer"><a href="/usuarios/recuperar">¿Olvidaste tu contraseña?</a></p>
 		<p class="form-footer">¿Todavía no tenés cuenta? <a href="/usuarios/register">Registrate</a></p>
 	</section>
 </main>

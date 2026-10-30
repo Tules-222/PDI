@@ -29,6 +29,7 @@ $compras = $compras ?? [];
           <?php foreach ($compra['items'] as $item): ?>
             <div class="purchase-item">
               <span><?= html((string) $item['nombre_producto']) ?> × <?= html((string) $item['cantidad']) ?> <?= html((string) $item['producto_unidad']) ?></span>
+              <?php if (!empty($item['nombre_emprendimiento'])): ?><span>Emprendimiento: <?= html((string) $item['nombre_emprendimiento']) ?></span><?php endif; ?>
               <span>Vendedor: <?= html((string) $item['nombre_vendedor']) ?></span>
               <strong>$<?= html(number_format((float) $item['precio_unitario'] * (int) $item['cantidad'], 2, ',', '.')) ?></strong>
             </div>

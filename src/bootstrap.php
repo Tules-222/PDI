@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Slim\Factory\AppFactory;
 use Slim\Views\PhpRenderer;
 use Dotenv\Dotenv;
+use PHPMailer\PHPMailer\PHPMailer;
 
 require __DIR__ . '/../vendor/autoload.php';
 require_once __DIR__ . '/database/database.php';
@@ -93,7 +94,882 @@ $requireAdmin = static function ($request, $response) {
   return null;
 };
 
+function recordAuditEvent(
+  PDO $pdo,
+  string $action,
+  string $entity,
+  ?int $entityId,
+  string $detail,
+  string $actor = 'admin_pin_compartido'
+): void {
+  $stmt = $pdo->prepare(
+    'INSERT INTO admin_auditoria (accion, entidad, entidad_id, detalle, actor) VALUES (:accion, :entidad, :entidad_id, :detalle, :actor)'
+  );
+  $stmt->execute([
+    'accion' => mb_substr($action, 0, 40),
+    'entidad' => mb_substr($entity, 0, 40),
+    'entidad_id' => $entityId,
+    'detalle' => mb_substr($detail, 0, 500),
+    'actor' => mb_substr($actor, 0, 100),
+  ]);
+}
+
 $loginUrl = static fn(string $path): string => '/usuarios/login?return_to=' . rawurlencode($path);
+
+$app->post('/productos/{id}/oferta', function ($request, $response, array $args) use ($requireCsrf, $loginUrl) {
+  if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
+    return $csrfFailure;
+  }
+  $user = currentUser();
+  if ($user === null) {
+    return $response->withHeader('Location', $loginUrl('/mis-productos'))->withStatus(303);
+  }
+
+  $id = filter_var($args['id'] ?? null, FILTER_VALIDATE_INT);
+  $data = $request->getParsedBody() ?? [];
+  $action = (string) ($data['accion'] ?? 'proponer');
+  if ($id === false || $id < 1 || !in_array($action, ['proponer', 'desactivar'], true)) {
+    $_SESSION['flash'] = 'La solicitud de oferta no es válida.';
+    return $response->withHeader('Location', '/mis-productos')->withStatus(303);
+  }
+
+  try {
+    $pdo = (new Database())->getConnection();
+    if ($action === 'desactivar') {
+      $stmt = $pdo->prepare(
+        "UPDATE productos SET oferta_estado = 'desactivada' WHERE id = :id AND usuario_id = :usuario_id AND oferta_estado IN ('pendiente', 'aprobada')"
+      );
+      $stmt->execute(['id' => $id, 'usuario_id' => $user['id']]);
+      if ($stmt->rowCount() > 0) {
+        recordAuditEvent($pdo, 'desactivar_oferta', 'producto', $id, 'El vendedor desactivó una oferta.', 'usuario:' . $user['id']);
+      }
+      $_SESSION['flash'] = $stmt->rowCount() > 0
+        ? 'La oferta se desactivó.'
+        : 'No encontramos una oferta activa para desactivar.';
+      return $response->withHeader('Location', '/mis-productos')->withStatus(303);
+    }
+
+    $price = trim((string) ($data['oferta_precio'] ?? ''));
+    $startInput = trim((string) ($data['oferta_inicio'] ?? ''));
+    $endInput = trim((string) ($data['oferta_fin'] ?? ''));
+    $start = DateTimeImmutable::createFromFormat('!Y-m-d\TH:i', $startInput, productOfferTimezone());
+    $startErrors = DateTimeImmutable::getLastErrors();
+    $end = DateTimeImmutable::createFromFormat('!Y-m-d\TH:i', $endInput, productOfferTimezone());
+    $endErrors = DateTimeImmutable::getLastErrors();
+    $validStart = $start !== false && ($startErrors === false || ($startErrors['warning_count'] === 0 && $startErrors['error_count'] === 0))
+      && $start->format('Y-m-d\TH:i') === $startInput;
+    $validEnd = $end !== false && ($endErrors === false || ($endErrors['warning_count'] === 0 && $endErrors['error_count'] === 0))
+      && $end->format('Y-m-d\TH:i') === $endInput;
+    if (!preg_match('/^\d+(?:\.\d{1,2})?$/D', $price) || !$validStart || !$validEnd) {
+      $_SESSION['flash'] = 'Ingresá un precio y un período de vigencia válidos.';
+      return $response->withHeader('Location', '/mis-productos')->withStatus(303);
+    }
+    if ($start <= new DateTimeImmutable('now', productOfferTimezone()) || $end <= $start) {
+      $_SESSION['flash'] = 'La oferta debe comenzar en el futuro y finalizar después de su inicio.';
+      return $response->withHeader('Location', '/mis-productos')->withStatus(303);
+    }
+
+    $productQuery = $pdo->prepare(
+      "SELECT p.precio, p.estado, e.estado AS emprendimiento_estado FROM productos p INNER JOIN emprendimientos e ON e.id = p.emprendimiento_id WHERE p.id = :id AND p.usuario_id = :usuario_id"
+    );
+    $productQuery->execute(['id' => $id, 'usuario_id' => $user['id']]);
+    $product = $productQuery->fetch();
+    if (
+      $product === false
+      || $product['estado'] !== 'aprobado'
+      || $product['emprendimiento_estado'] !== 'activo'
+      || (float) $price <= 0
+      || (float) $price >= (float) $product['precio']
+    ) {
+      $_SESSION['flash'] = 'Solo podés proponer ofertas menores al precio regular para productos aprobados de emprendimientos activos.';
+      return $response->withHeader('Location', '/mis-productos')->withStatus(303);
+    }
+
+    $stmt = $pdo->prepare(
+      "UPDATE productos SET oferta_precio = :precio, oferta_inicio = :inicio, oferta_fin = :fin, oferta_estado = 'pendiente', oferta_motivo_revision = NULL WHERE id = :id AND usuario_id = :usuario_id"
+    );
+    $stmt->execute([
+      'precio' => number_format((float) $price, 2, '.', ''),
+      'inicio' => $start->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s'),
+      'fin' => $end->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s'),
+      'id' => $id,
+      'usuario_id' => $user['id'],
+    ]);
+    recordAuditEvent($pdo, 'proponer_oferta', 'producto', $id, 'El vendedor propuso una oferta pendiente de aprobación.', 'usuario:' . $user['id']);
+    $_SESSION['flash'] = 'La oferta quedó pendiente de aprobación administrativa.';
+  } catch (Throwable $exception) {
+    error_log($exception->getMessage());
+    $_SESSION['flash'] = 'No se pudo guardar la propuesta de oferta.';
+  }
+  return $response->withHeader('Location', '/mis-productos')->withStatus(303);
+});
+
+$getSmtpConfig = static function (): ?array {
+  $host = trim((string) ($_ENV['SMTP_HOST'] ?? ''));
+  $username = trim((string) ($_ENV['SMTP_USERNAME'] ?? ''));
+  $password = (string) ($_ENV['SMTP_PASSWORD'] ?? '');
+  $fromEmail = trim((string) ($_ENV['SMTP_FROM_EMAIL'] ?? ''));
+  $encryption = strtolower(trim((string) ($_ENV['SMTP_ENCRYPTION'] ?? 'tls')));
+  $port = filter_var($_ENV['SMTP_PORT'] ?? 587, FILTER_VALIDATE_INT);
+  $appUrl = rtrim(trim((string) ($_ENV['APP_URL'] ?? '')), '/');
+  $appUrlParts = parse_url($appUrl);
+
+  if (
+    $host === ''
+    || $username === ''
+    || $password === ''
+    || !filter_var($fromEmail, FILTER_VALIDATE_EMAIL)
+    || $port === false
+    || $port < 1
+    || $port > 65535
+    || !in_array($encryption, ['tls', 'ssl'], true)
+    || !is_array($appUrlParts)
+    || filter_var($appUrl, FILTER_VALIDATE_URL) === false
+    || !in_array($appUrlParts['scheme'] ?? '', ['https', 'http'], true)
+    || empty($appUrlParts['host'])
+    || (($appUrlParts['scheme'] ?? '') !== 'https'
+      && !in_array(strtolower(trim((string) $appUrlParts['host'], '[]')), ['localhost', '127.0.0.1', '::1'], true))
+    || isset($appUrlParts['user'])
+    || isset($appUrlParts['pass'])
+    || isset($appUrlParts['query'])
+    || isset($appUrlParts['fragment'])
+  ) {
+    return null;
+  }
+
+  return [
+    'host' => $host,
+    'port' => $port,
+    'username' => $username,
+    'password' => $password,
+    'encryption' => $encryption,
+    'from_email' => $fromEmail,
+    'from_name' => trim((string) ($_ENV['SMTP_FROM_NAME'] ?? '')) ?: 'Emprendi',
+    'app_url' => $appUrl,
+  ];
+};
+$sendPasswordResetEmail = static function (string $email, string $token, array $smtpConfig): void {
+  $resetUrl = $smtpConfig['app_url'] . '/usuarios/restablecer?token=' . rawurlencode($token);
+  $mail = new PHPMailer(true);
+  $mail->isSMTP();
+  $mail->Host = $smtpConfig['host'];
+  $mail->Port = $smtpConfig['port'];
+  $mail->SMTPAuth = true;
+  $mail->Timeout = 10;
+  $mail->Username = $smtpConfig['username'];
+  $mail->Password = $smtpConfig['password'];
+  $mail->SMTPSecure = $smtpConfig['encryption'];
+  $mail->CharSet = 'UTF-8';
+  $mail->setFrom($smtpConfig['from_email'], $smtpConfig['from_name']);
+  $mail->addAddress($email);
+  $mail->isHTML(false);
+  $mail->Subject = 'Restablecer contraseña de Emprendi';
+  $mail->Body = "Recibimos un pedido para restablecer tu contraseña.\n\n"
+    . "Abrí este enlace dentro de la próxima hora y elegí una contraseña nueva:\n"
+    . $resetUrl . "\n\n"
+    . "Si no solicitaste el cambio, podés ignorar este mensaje.";
+  $mail->send();
+};
+
+$app->get('/conversaciones', function ($request, $response) use ($renderer, $loginUrl, $renderError) {
+  $user = currentUser();
+  if ($user === null) {
+    return $response->withHeader('Location', $loginUrl('/conversaciones'))->withStatus(303);
+  }
+
+  try {
+    $pdo = (new Database())->getConnection();
+    $stmt = $pdo->prepare(
+      'SELECT c.id, c.actualizado_en, e.nombre AS emprendimiento, p.nombre AS producto, CASE WHEN c.comprador_id = :usuario_comprador THEN v.nombre ELSE b.nombre END AS interlocutor, (SELECT m.contenido FROM mensajes m WHERE m.conversacion_id = c.id ORDER BY m.id DESC LIMIT 1) AS ultimo_mensaje, (SELECT COUNT(*) FROM mensajes m WHERE m.conversacion_id = c.id AND m.remitente_id <> :usuario_no_leido AND m.leido_en IS NULL) AS no_leidos FROM conversaciones c INNER JOIN usuarios b ON b.id = c.comprador_id INNER JOIN usuarios v ON v.id = c.vendedor_id LEFT JOIN emprendimientos e ON e.id = c.emprendimiento_id LEFT JOIN productos p ON p.id = c.producto_id WHERE c.comprador_id = :comprador_id OR c.vendedor_id = :vendedor_id ORDER BY c.actualizado_en DESC, c.id DESC'
+    );
+    $stmt->execute([
+      'usuario_comprador' => $user['id'],
+      'usuario_no_leido' => $user['id'],
+      'comprador_id' => $user['id'],
+      'vendedor_id' => $user['id'],
+    ]);
+
+    return view($renderer, $response, '/conversaciones/index.php', [
+      'conversaciones' => $stmt->fetchAll(),
+    ]);
+  } catch (Throwable $exception) {
+    error_log($exception->getMessage());
+    return $renderError($response, 500, 'No se pudieron cargar tus conversaciones.');
+  }
+});
+
+$app->post('/conversaciones', function ($request, $response) use ($requireCsrf, $loginUrl) {
+  $data = $request->getParsedBody() ?? [];
+  $productId = filter_var($data['producto_id'] ?? null, FILTER_VALIDATE_INT);
+  $storeId = filter_var($data['emprendimiento_id'] ?? null, FILTER_VALIDATE_INT);
+  $returnPath = $productId !== false && $productId > 0
+    ? '/productos/' . $productId
+    : ($storeId !== false && $storeId > 0 ? '/emprendimientos/' . $storeId : '/emprendimientos');
+
+  if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
+    return $csrfFailure;
+  }
+
+  $user = currentUser();
+  if ($user === null) {
+    return $response->withHeader('Location', $loginUrl($returnPath))->withStatus(303);
+  }
+
+  try {
+    $pdo = (new Database())->getConnection();
+    if ($productId !== false && $productId > 0) {
+      $stmt = $pdo->prepare(
+        "SELECT p.id, p.usuario_id AS vendedor_id, p.emprendimiento_id, e.nombre AS emprendimiento, e.estado AS emprendimiento_estado, u.estado AS vendedor_estado FROM productos p INNER JOIN emprendimientos e ON e.id = p.emprendimiento_id INNER JOIN usuarios u ON u.id = p.usuario_id WHERE p.id = :id AND p.estado = 'aprobado'"
+      );
+      $stmt->execute(['id' => $productId]);
+    } elseif ($storeId !== false && $storeId > 0) {
+      $stmt = $pdo->prepare(
+        "SELECT NULL AS id, e.usuario_id AS vendedor_id, e.id AS emprendimiento_id, e.nombre AS emprendimiento, e.estado AS emprendimiento_estado, u.estado AS vendedor_estado FROM emprendimientos e INNER JOIN usuarios u ON u.id = e.usuario_id WHERE e.id = :id"
+      );
+      $stmt->execute(['id' => $storeId]);
+    } else {
+      $_SESSION['flash'] = 'No pudimos identificar el producto o emprendimiento de la consulta.';
+      return $response->withHeader('Location', $returnPath)->withStatus(303);
+    }
+
+    $target = $stmt->fetch();
+    if (
+      $target === false
+      || $target['emprendimiento_estado'] !== 'activo'
+      || $target['vendedor_estado'] !== 'activo'
+    ) {
+      $_SESSION['flash'] = 'Ese emprendimiento o producto no está disponible para consultas.';
+      return $response->withHeader('Location', $returnPath)->withStatus(303);
+    }
+    if ((int) $target['vendedor_id'] === $user['id']) {
+      $_SESSION['flash'] = 'No podés iniciar una conversación con tu propio emprendimiento.';
+      return $response->withHeader('Location', $returnPath)->withStatus(303);
+    }
+
+    if ($target['id'] !== null) {
+      $existing = $pdo->prepare(
+        'SELECT id FROM conversaciones WHERE comprador_id = :comprador_id AND vendedor_id = :vendedor_id AND producto_id = :producto_id ORDER BY id DESC LIMIT 1'
+      );
+      $existing->execute([
+        'comprador_id' => $user['id'],
+        'vendedor_id' => $target['vendedor_id'],
+        'producto_id' => $target['id'],
+      ]);
+    } else {
+      $existing = $pdo->prepare(
+        'SELECT id FROM conversaciones WHERE comprador_id = :comprador_id AND vendedor_id = :vendedor_id AND emprendimiento_id = :emprendimiento_id AND producto_id IS NULL ORDER BY id DESC LIMIT 1'
+      );
+      $existing->execute([
+        'comprador_id' => $user['id'],
+        'vendedor_id' => $target['vendedor_id'],
+        'emprendimiento_id' => $target['emprendimiento_id'],
+      ]);
+    }
+
+    $conversationId = $existing->fetchColumn();
+    if ($conversationId === false) {
+      $insert = $pdo->prepare(
+        'INSERT INTO conversaciones (comprador_id, vendedor_id, emprendimiento_id, producto_id) VALUES (:comprador_id, :vendedor_id, :emprendimiento_id, :producto_id)'
+      );
+      $insert->execute([
+        'comprador_id' => $user['id'],
+        'vendedor_id' => $target['vendedor_id'],
+        'emprendimiento_id' => $target['emprendimiento_id'],
+        'producto_id' => $target['id'],
+      ]);
+      $conversationId = $pdo->lastInsertId();
+    }
+
+    return $response->withHeader('Location', '/conversaciones/' . $conversationId)->withStatus(303);
+  } catch (Throwable $exception) {
+    error_log($exception->getMessage());
+    $_SESSION['flash'] = 'No se pudo iniciar la conversación. Intentá nuevamente.';
+    return $response->withHeader('Location', $returnPath)->withStatus(303);
+  }
+});
+
+$app->get('/conversaciones/{id}', function ($request, $response, array $args) use ($renderer, $loginUrl, $renderError) {
+  $response = $response->withHeader('Cache-Control', 'no-store')
+    ->withHeader('Referrer-Policy', 'no-referrer');
+  $user = currentUser();
+  if ($user === null) {
+    return $response->withHeader('Location', $loginUrl('/conversaciones'))->withStatus(303);
+  }
+  $id = filter_var($args['id'] ?? null, FILTER_VALIDATE_INT);
+  if ($id === false || $id < 1) {
+    return $renderError($response, 404, 'No encontramos esa conversación.');
+  }
+
+  try {
+    $pdo = (new Database())->getConnection();
+    $stmt = $pdo->prepare(
+      'SELECT c.id, c.comprador_id, c.vendedor_id, c.actualizado_en, e.nombre AS emprendimiento, p.nombre AS producto, CASE WHEN c.comprador_id = :usuario_contacto THEN v.nombre ELSE b.nombre END AS interlocutor FROM conversaciones c INNER JOIN usuarios b ON b.id = c.comprador_id INNER JOIN usuarios v ON v.id = c.vendedor_id LEFT JOIN emprendimientos e ON e.id = c.emprendimiento_id LEFT JOIN productos p ON p.id = c.producto_id WHERE c.id = :id AND (c.comprador_id = :comprador_id OR c.vendedor_id = :vendedor_id)'
+    );
+    $stmt->execute([
+      'usuario_contacto' => $user['id'],
+      'id' => $id,
+      'comprador_id' => $user['id'],
+      'vendedor_id' => $user['id'],
+    ]);
+    $conversation = $stmt->fetch();
+    if ($conversation === false) {
+      return $renderError($response, 404, 'No encontramos esa conversación.');
+    }
+
+    $pdo->prepare(
+      'UPDATE mensajes SET leido_en = CURRENT_TIMESTAMP WHERE conversacion_id = :conversacion_id AND remitente_id <> :usuario_id AND leido_en IS NULL'
+    )->execute(['conversacion_id' => $id, 'usuario_id' => $user['id']]);
+    $messages = $pdo->prepare(
+      'SELECT id, remitente_id, contenido, creado_en, leido_en FROM mensajes WHERE conversacion_id = :conversacion_id ORDER BY id DESC LIMIT 100'
+    );
+    $messages->execute(['conversacion_id' => $id]);
+    $messages = array_reverse($messages->fetchAll());
+
+    return view($renderer, $response, '/conversaciones/show.php', [
+      'conversacion' => $conversation,
+      'mensajes' => $messages,
+      'currentUserId' => $user['id'],
+      'lastMessageId' => $messages === [] ? 0 : (int) end($messages)['id'],
+    ]);
+  } catch (Throwable $exception) {
+    error_log($exception->getMessage());
+    return $renderError($response, 500, 'No se pudo cargar la conversación.');
+  }
+});
+
+$app->post('/conversaciones/{id}/mensajes', function ($request, $response, array $args) use ($requireCsrf, $loginUrl, $renderError) {
+  if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
+    return $csrfFailure;
+  }
+  $user = currentUser();
+  if ($user === null) {
+    return $response->withHeader('Location', $loginUrl('/conversaciones'))->withStatus(303);
+  }
+  $id = filter_var($args['id'] ?? null, FILTER_VALIDATE_INT);
+  $contenido = trim((string) (($request->getParsedBody() ?? [])['contenido'] ?? ''));
+  if ($id === false || $id < 1 || $contenido === '' || mb_strlen($contenido) > 2000) {
+    return $renderError($response, 422, 'El mensaje no es válido.');
+  }
+
+  try {
+    $pdo = (new Database())->getConnection();
+    $pdo->beginTransaction();
+    $conversation = $pdo->prepare(
+      'SELECT id FROM conversaciones WHERE id = :id AND (comprador_id = :comprador_id OR vendedor_id = :vendedor_id) FOR UPDATE'
+    );
+    $conversation->execute([
+      'id' => $id,
+      'comprador_id' => $user['id'],
+      'vendedor_id' => $user['id'],
+    ]);
+    if ($conversation->fetchColumn() === false) {
+      $pdo->rollBack();
+      return $renderError($response, 404, 'No encontramos esa conversación.');
+    }
+
+    $pdo->prepare(
+      'INSERT INTO mensajes (conversacion_id, remitente_id, contenido) VALUES (:conversacion_id, :remitente_id, :contenido)'
+    )->execute([
+      'conversacion_id' => $id,
+      'remitente_id' => $user['id'],
+      'contenido' => $contenido,
+    ]);
+    $pdo->prepare('UPDATE conversaciones SET actualizado_en = CURRENT_TIMESTAMP WHERE id = :id')
+      ->execute(['id' => $id]);
+    $pdo->commit();
+    return $response->withHeader('Location', '/conversaciones/' . $id)->withStatus(303);
+  } catch (Throwable $exception) {
+    if (isset($pdo) && $pdo->inTransaction()) {
+      $pdo->rollBack();
+    }
+    error_log($exception->getMessage());
+    return $renderError($response, 500, 'No se pudo enviar el mensaje.');
+  }
+});
+
+$app->get('/conversaciones/{id}/nuevos', function ($request, $response, array $args) use ($renderError) {
+  $user = currentUser();
+  $id = filter_var($args['id'] ?? null, FILTER_VALIDATE_INT);
+  $after = filter_var($request->getQueryParams()['despues'] ?? 0, FILTER_VALIDATE_INT);
+  if ($user === null || $id === false || $id < 1 || $after === false || $after < 0) {
+    return $renderError($response, 404, 'No encontramos esa conversación.');
+  }
+
+  try {
+    $pdo = (new Database())->getConnection();
+    $conversation = $pdo->prepare(
+      'SELECT id FROM conversaciones WHERE id = :id AND (comprador_id = :comprador_id OR vendedor_id = :vendedor_id)'
+    );
+    $conversation->execute([
+      'id' => $id,
+      'comprador_id' => $user['id'],
+      'vendedor_id' => $user['id'],
+    ]);
+    if ($conversation->fetchColumn() === false) {
+      return $renderError($response, 404, 'No encontramos esa conversación.');
+    }
+
+    $pdo->prepare(
+      'UPDATE mensajes SET leido_en = CURRENT_TIMESTAMP WHERE conversacion_id = :conversacion_id AND remitente_id <> :usuario_id AND leido_en IS NULL'
+    )->execute(['conversacion_id' => $id, 'usuario_id' => $user['id']]);
+    $stmt = $pdo->prepare(
+      'SELECT id, remitente_id, contenido, creado_en FROM mensajes WHERE conversacion_id = :conversacion_id AND id > :despues ORDER BY id ASC LIMIT 100'
+    );
+    $stmt->execute(['conversacion_id' => $id, 'despues' => $after]);
+    $messages = array_map(static fn(array $message): array => [
+      'id' => (int) $message['id'],
+      'remitente_id' => (int) $message['remitente_id'],
+      'contenido' => (string) $message['contenido'],
+      'creado_en' => (string) $message['creado_en'],
+    ], $stmt->fetchAll());
+    $response->getBody()->write(json_encode(['mensajes' => $messages], JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE));
+    return $response->withHeader('Content-Type', 'application/json; charset=UTF-8')
+      ->withHeader('Cache-Control', 'no-store');
+  } catch (Throwable $exception) {
+    error_log($exception->getMessage());
+    return $renderError($response, 500, 'No se pudieron actualizar los mensajes.');
+  }
+});
+
+$app->get('/emprendimientos', function ($request, $response) use ($renderer, $renderError) {
+  $search = mb_substr(trim((string) ($request->getQueryParams()['q'] ?? '')), 0, 100);
+  try {
+    $pdo = (new Database())->getConnection();
+    $query = $pdo->prepare(
+      "SELECT e.id, e.nombre, e.descripcion, e.localidad, e.provincia, COUNT(p.id) AS productos FROM emprendimientos e INNER JOIN usuarios u ON u.id = e.usuario_id LEFT JOIN productos p ON p.emprendimiento_id = e.id AND p.estado = 'aprobado' WHERE e.estado = 'activo' AND u.estado = 'activo' AND (:name_term = '' OR e.nombre LIKE :name_search OR e.descripcion LIKE :description_search OR e.localidad LIKE :localidad_search OR e.provincia LIKE :provincia_search) GROUP BY e.id ORDER BY e.nombre ASC LIMIT 48"
+    );
+    $term = $search === '' ? '' : '%' . addcslashes($search, '\\%_') . '%';
+    $query->execute([
+      'name_term' => $search,
+      'name_search' => $term,
+      'description_search' => $term,
+      'localidad_search' => $term,
+      'provincia_search' => $term,
+    ]);
+
+    return view($renderer, $response, '/emprendimientos/search.php', [
+      'emprendimientos' => $query->fetchAll(),
+      'search' => $search,
+    ]);
+  } catch (PDOException $exception) {
+    error_log($exception->getMessage());
+    return $renderError($response, 500, 'No se pudieron buscar emprendimientos.');
+  }
+});
+
+$app->get('/mis-emprendimientos', function ($request, $response) use ($renderer, $loginUrl, $renderError) {
+  $user = currentUser();
+  if ($user === null) {
+    return $response->withHeader('Location', $loginUrl('/mis-emprendimientos'))->withStatus(303);
+  }
+
+  try {
+    $stmt = (new Database())->getConnection()->prepare(
+      'SELECT e.id, e.nombre, e.descripcion, e.localidad, e.provincia, e.estado, COUNT(p.id) AS productos FROM emprendimientos e LEFT JOIN productos p ON p.emprendimiento_id = e.id WHERE e.usuario_id = :usuario_id GROUP BY e.id ORDER BY e.id ASC'
+    );
+    $stmt->execute(['usuario_id' => $user['id']]);
+    return view($renderer, $response, '/emprendimientos/index.php', [
+      'emprendimientos' => $stmt->fetchAll(),
+    ]);
+  } catch (PDOException $exception) {
+    error_log($exception->getMessage());
+    return $renderError($response, 500, 'No se pudieron cargar tus emprendimientos.');
+  }
+});
+
+$app->get('/emprendimientos/crear', function ($request, $response) use ($renderer, $loginUrl) {
+  if (currentUser() === null) {
+    return $response->withHeader('Location', $loginUrl('/emprendimientos/crear'))->withStatus(303);
+  }
+
+  return view($renderer, $response, '/emprendimientos/form.php');
+});
+
+$app->post('/emprendimientos', function ($request, $response) use ($renderer, $requireCsrf, $loginUrl) {
+  if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
+    return $csrfFailure;
+  }
+
+  $user = currentUser();
+  if ($user === null) {
+    return $response->withHeader('Location', $loginUrl('/emprendimientos/crear'))->withStatus(303);
+  }
+
+  $data = $request->getParsedBody() ?? [];
+  $store = [
+    'nombre' => trim((string) ($data['nombre'] ?? '')),
+    'descripcion' => trim((string) ($data['descripcion'] ?? '')),
+    'localidad' => trim((string) ($data['localidad'] ?? '')),
+    'provincia' => trim((string) ($data['provincia'] ?? '')),
+  ];
+  if (
+    $store['nombre'] === ''
+    || mb_strlen($store['nombre']) > 255
+    || mb_strlen($store['descripcion']) > 500
+    || mb_strlen($store['localidad']) > 100
+    || mb_strlen($store['provincia']) > 100
+  ) {
+    return view($renderer, $response->withStatus(422), '/emprendimientos/form.php', [
+      'emprendimiento' => $store,
+      'error' => 'Completá un nombre válido y revisá los límites de longitud.',
+    ]);
+  }
+
+  try {
+    $pdo = (new Database())->getConnection();
+    $stmt = $pdo->prepare(
+      "INSERT INTO emprendimientos (usuario_id, nombre, descripcion, localidad, provincia, estado) VALUES (:usuario_id, :nombre, :descripcion, :localidad, :provincia, 'activo')"
+    );
+    $stmt->execute(['usuario_id' => $user['id'], ...$store]);
+    recordAuditEvent($pdo, 'crear_emprendimiento', 'emprendimiento', (int) $pdo->lastInsertId(), 'Se creó un emprendimiento.', 'usuario:' . $user['id']);
+    $_SESSION['flash'] = 'El emprendimiento se creó correctamente.';
+    return $response->withHeader('Location', '/mis-emprendimientos')->withStatus(303);
+  } catch (PDOException $exception) {
+    if (($exception->errorInfo[1] ?? null) === 1062) {
+      return view($renderer, $response->withStatus(409), '/emprendimientos/form.php', [
+        'emprendimiento' => $store,
+        'error' => 'Ya tenés un emprendimiento con ese nombre.',
+      ]);
+    }
+
+    error_log($exception->getMessage());
+    return view($renderer, $response->withStatus(500), '/emprendimientos/form.php', [
+      'emprendimiento' => $store,
+      'error' => 'No se pudo crear el emprendimiento.',
+    ]);
+  }
+});
+
+$app->get('/emprendimientos/{id}/editar', function ($request, $response, array $args) use ($renderer, $renderError, $loginUrl) {
+  $user = currentUser();
+  if ($user === null) {
+    return $response->withHeader('Location', $loginUrl('/emprendimientos/' . rawurlencode((string) $args['id']) . '/editar'))->withStatus(303);
+  }
+
+  try {
+    $stmt = (new Database())->getConnection()->prepare(
+      'SELECT id, nombre, descripcion, localidad, provincia, estado FROM emprendimientos WHERE id = :id AND usuario_id = :usuario_id'
+    );
+    $stmt->execute(['id' => (int) $args['id'], 'usuario_id' => $user['id']]);
+    $store = $stmt->fetch();
+    if ($store === false) {
+      return $renderError($response, 404, 'No encontramos ese emprendimiento.');
+    }
+
+    return view($renderer, $response, '/emprendimientos/form.php', [
+      'emprendimiento' => $store,
+      'editing' => true,
+    ]);
+  } catch (PDOException $exception) {
+    error_log($exception->getMessage());
+    return $renderError($response, 500, 'No se pudo cargar el emprendimiento.');
+  }
+});
+
+$app->post('/emprendimientos/{id}/actualizar', function ($request, $response, array $args) use ($renderer, $requireCsrf, $loginUrl) {
+  if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
+    return $csrfFailure;
+  }
+
+  $user = currentUser();
+  if ($user === null) {
+    return $response->withHeader('Location', $loginUrl('/emprendimientos/' . rawurlencode((string) $args['id']) . '/editar'))->withStatus(303);
+  }
+
+  $id = filter_var($args['id'] ?? null, FILTER_VALIDATE_INT);
+  $data = $request->getParsedBody() ?? [];
+  $store = [
+    'nombre' => trim((string) ($data['nombre'] ?? '')),
+    'descripcion' => trim((string) ($data['descripcion'] ?? '')),
+    'localidad' => trim((string) ($data['localidad'] ?? '')),
+    'provincia' => trim((string) ($data['provincia'] ?? '')),
+  ];
+  if (
+    $id === false || $id < 1
+    || $store['nombre'] === ''
+    || mb_strlen($store['nombre']) > 255
+    || mb_strlen($store['descripcion']) > 500
+    || mb_strlen($store['localidad']) > 100
+    || mb_strlen($store['provincia']) > 100
+  ) {
+    return view($renderer, $response->withStatus(422), '/emprendimientos/form.php', [
+      'emprendimiento' => [...$store, 'id' => $id ?: ''],
+      'editing' => true,
+      'error' => 'Completá un nombre válido y revisá los límites de longitud.',
+    ]);
+  }
+
+  try {
+    $pdo = (new Database())->getConnection();
+    $stmt = $pdo->prepare(
+      'UPDATE emprendimientos SET nombre = :nombre, descripcion = :descripcion, localidad = :localidad, provincia = :provincia WHERE id = :id AND usuario_id = :usuario_id'
+    );
+    $stmt->execute([...$store, 'id' => $id, 'usuario_id' => $user['id']]);
+    if ($stmt->rowCount() > 0) {
+      recordAuditEvent($pdo, 'editar_emprendimiento', 'emprendimiento', $id, 'Se actualizaron los datos comerciales.', 'usuario:' . $user['id']);
+    }
+    $_SESSION['flash'] = $stmt->rowCount() > 0
+      ? 'El emprendimiento se actualizó correctamente.'
+      : 'No encontramos ese emprendimiento o no había cambios.';
+    return $response->withHeader('Location', '/mis-emprendimientos')->withStatus(303);
+  } catch (PDOException $exception) {
+    if (($exception->errorInfo[1] ?? null) === 1062) {
+      return view($renderer, $response->withStatus(409), '/emprendimientos/form.php', [
+        'emprendimiento' => [...$store, 'id' => $id],
+        'editing' => true,
+        'error' => 'Ya tenés un emprendimiento con ese nombre.',
+      ]);
+    }
+
+    error_log($exception->getMessage());
+    return view($renderer, $response->withStatus(500), '/emprendimientos/form.php', [
+      'emprendimiento' => [...$store, 'id' => $id],
+      'editing' => true,
+      'error' => 'No se pudo actualizar el emprendimiento.',
+    ]);
+  }
+});
+
+$app->post('/emprendimientos/{id}/estado', function ($request, $response, array $args) use ($requireCsrf, $loginUrl) {
+  if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
+    return $csrfFailure;
+  }
+  $user = currentUser();
+  if ($user === null) {
+    return $response->withHeader('Location', $loginUrl('/mis-emprendimientos'))->withStatus(303);
+  }
+
+  $data = $request->getParsedBody() ?? [];
+  $state = (string) ($data['estado'] ?? '');
+  if (!in_array($state, ['activo', 'inactivo'], true)) {
+    $_SESSION['flash'] = 'El estado solicitado no es válido.';
+    return $response->withHeader('Location', '/mis-emprendimientos')->withStatus(303);
+  }
+
+  try {
+    $pdo = (new Database())->getConnection();
+    $stmt = $pdo->prepare(
+      'UPDATE emprendimientos SET estado = :estado WHERE id = :id AND usuario_id = :usuario_id'
+    );
+    $stmt->execute([
+      'estado' => $state,
+      'id' => (int) $args['id'],
+      'usuario_id' => $user['id'],
+    ]);
+    if ($stmt->rowCount() > 0) {
+      recordAuditEvent(
+        $pdo,
+        $state === 'activo' ? 'reactivar_emprendimiento' : 'pausar_emprendimiento',
+        'emprendimiento',
+        (int) $args['id'],
+        $state === 'activo' ? 'Se reactivó el emprendimiento.' : 'Se pausó el emprendimiento.',
+        'usuario:' . $user['id']
+      );
+    }
+    $_SESSION['flash'] = $stmt->rowCount() > 0
+      ? ($state === 'activo' ? 'El emprendimiento volvió a estar activo.' : 'El emprendimiento quedó pausado.')
+      : 'No encontramos ese emprendimiento.';
+  } catch (PDOException $exception) {
+    error_log($exception->getMessage());
+    $_SESSION['flash'] = 'No se pudo actualizar el estado del emprendimiento.';
+  }
+  return $response->withHeader('Location', '/mis-emprendimientos')->withStatus(303);
+});
+
+$app->get('/emprendimientos/seguidos', function ($request, $response) use ($renderer, $loginUrl, $renderError) {
+  $user = currentUser();
+  if ($user === null) {
+    return $response->withHeader('Location', $loginUrl('/emprendimientos/seguidos'))->withStatus(303);
+  }
+
+  try {
+    $stmt = (new Database())->getConnection()->prepare(
+      "SELECT e.id, e.nombre, e.descripcion, e.localidad, e.provincia, COUNT(DISTINCT p.id) AS productos FROM emprendimiento_seguidores s INNER JOIN emprendimientos e ON e.id = s.emprendimiento_id INNER JOIN usuarios u ON u.id = e.usuario_id LEFT JOIN productos p ON p.emprendimiento_id = e.id AND p.estado = 'aprobado' WHERE s.usuario_id = :usuario_id AND e.estado = 'activo' AND u.estado = 'activo' GROUP BY e.id ORDER BY e.nombre ASC"
+    );
+    $stmt->execute(['usuario_id' => $user['id']]);
+    return view($renderer, $response, '/emprendimientos/seguidos.php', [
+      'emprendimientos' => $stmt->fetchAll(),
+    ]);
+  } catch (Throwable $exception) {
+    error_log($exception->getMessage());
+    return $renderError($response, 500, 'No se pudieron cargar los emprendimientos que seguís.');
+  }
+});
+
+$app->post('/emprendimientos/{id}/seguir', function ($request, $response, array $args) use ($requireCsrf, $loginUrl) {
+  if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
+    return $csrfFailure;
+  }
+  $user = currentUser();
+  $id = filter_var($args['id'] ?? null, FILTER_VALIDATE_INT);
+  if ($user === null) {
+    return $response->withHeader('Location', $loginUrl('/emprendimientos'))->withStatus(303);
+  }
+  if ($id === false || $id < 1) {
+    return $response->withHeader('Location', '/emprendimientos')->withStatus(303);
+  }
+
+  $data = $request->getParsedBody() ?? [];
+  $action = (string) ($data['accion'] ?? '');
+  if (!in_array($action, ['seguir', 'dejar'], true)) {
+    $_SESSION['flash'] = 'La acción solicitada no es válida.';
+    return $response->withHeader('Location', '/emprendimientos/' . $id)->withStatus(303);
+  }
+
+  try {
+    $pdo = (new Database())->getConnection();
+    $store = $pdo->prepare(
+      "SELECT usuario_id FROM emprendimientos WHERE id = :id AND estado = 'activo'"
+    );
+    $store->execute(['id' => $id]);
+    $ownerId = $store->fetchColumn();
+    if ($ownerId === false) {
+      $_SESSION['flash'] = 'No encontramos ese emprendimiento.';
+      return $response->withHeader('Location', '/emprendimientos')->withStatus(303);
+    }
+    if ((int) $ownerId === $user['id']) {
+      $_SESSION['flash'] = 'No podés seguir tu propio emprendimiento.';
+      return $response->withHeader('Location', '/emprendimientos/' . $id)->withStatus(303);
+    }
+
+    if ($action === 'seguir') {
+      try {
+        $pdo->prepare(
+          'INSERT INTO emprendimiento_seguidores (usuario_id, emprendimiento_id) VALUES (:usuario_id, :emprendimiento_id)'
+        )->execute(['usuario_id' => $user['id'], 'emprendimiento_id' => $id]);
+        $_SESSION['flash'] = 'Ahora seguís este emprendimiento.';
+      } catch (PDOException $exception) {
+        if (($exception->errorInfo[1] ?? null) !== 1062) {
+          throw $exception;
+        }
+        $_SESSION['flash'] = 'Ya seguís este emprendimiento.';
+      }
+    } else {
+      $pdo->prepare(
+        'DELETE FROM emprendimiento_seguidores WHERE usuario_id = :usuario_id AND emprendimiento_id = :emprendimiento_id'
+      )->execute(['usuario_id' => $user['id'], 'emprendimiento_id' => $id]);
+      $_SESSION['flash'] = 'Dejaste de seguir este emprendimiento.';
+    }
+  } catch (Throwable $exception) {
+    error_log($exception->getMessage());
+    $_SESSION['flash'] = 'No se pudo actualizar el seguimiento.';
+  }
+
+  return $response->withHeader('Location', '/emprendimientos/' . $id)->withStatus(303);
+});
+
+$app->get('/emprendimientos/{id}', function ($request, $response, array $args) use ($renderer, $renderError) {
+  $id = filter_var($args['id'] ?? null, FILTER_VALIDATE_INT);
+  if ($id === false || $id < 1) {
+    return $renderError($response, 404, 'No encontramos ese emprendimiento.');
+  }
+
+  try {
+    $pdo = (new Database())->getConnection();
+    $storeQuery = $pdo->prepare(
+      "SELECT e.id, e.usuario_id, e.nombre, e.descripcion, e.localidad, e.provincia, u.nombre AS vendedor_nombre FROM emprendimientos e INNER JOIN usuarios u ON u.id = e.usuario_id WHERE e.id = :id AND e.estado = 'activo' AND u.estado = 'activo'"
+    );
+    $storeQuery->execute(['id' => $id]);
+    $store = $storeQuery->fetch();
+    if ($store === false) {
+      return $renderError($response, 404, 'No encontramos ese emprendimiento.');
+    }
+
+    $productsQuery = $pdo->prepare(
+      "SELECT p.id, p.nombre, p.precio AS precio_original, " . currentProductPriceSql('p') . " AS precio, " . productOfferActiveSql('p') . " AS oferta_vigente, p.oferta_fin, p.descripcion, p.categoria, p.condicion, p.unidad, p.cantidad_minima, p.stock, COALESCE(r.promedio, 0) AS promedio_resenas, COALESCE(r.cantidad, 0) AS cantidad_resenas FROM productos p LEFT JOIN (SELECT producto_id, AVG(puntaje) AS promedio, COUNT(*) AS cantidad FROM producto_resenas GROUP BY producto_id) r ON r.producto_id = p.id WHERE p.emprendimiento_id = :emprendimiento_id AND p.estado = 'aprobado' ORDER BY p.id DESC LIMIT 48"
+    );
+    $productsQuery->execute(['emprendimiento_id' => $id]);
+    $storeProducts = attachProductImages($pdo, $productsQuery->fetchAll());
+    $ratingQuery = $pdo->prepare(
+      'SELECT AVG(puntaje) AS promedio, COUNT(*) AS cantidad FROM producto_resenas WHERE vendedor_id = :vendedor_id'
+    );
+    $ratingQuery->execute(['vendedor_id' => $store['usuario_id']]);
+    $followersQuery = $pdo->prepare(
+      'SELECT COUNT(*) FROM emprendimiento_seguidores WHERE emprendimiento_id = :emprendimiento_id'
+    );
+    $followersQuery->execute(['emprendimiento_id' => $id]);
+    $isFollowing = false;
+    if (currentUser() !== null) {
+      $followingQuery = $pdo->prepare(
+        'SELECT 1 FROM emprendimiento_seguidores WHERE usuario_id = :usuario_id AND emprendimiento_id = :emprendimiento_id'
+      );
+      $followingQuery->execute([
+        'usuario_id' => currentUser()['id'],
+        'emprendimiento_id' => $id,
+      ]);
+      $isFollowing = $followingQuery->fetchColumn() !== false;
+    }
+
+    return view($renderer, $response, '/vendedores/show.php', [
+      'seller' => [
+        'id' => $store['id'],
+        'usuario_id' => $store['usuario_id'],
+        'nombre' => $store['nombre'],
+        'localidad' => $store['localidad'],
+        'provincia' => $store['provincia'],
+        'descripcion_vendedor' => $store['descripcion'],
+      ],
+      'sellerProducts' => $storeProducts,
+      'sellerRating' => $ratingQuery->fetch() ?: ['promedio' => null, 'cantidad' => 0],
+      'followerCount' => (int) $followersQuery->fetchColumn(),
+      'isFollowing' => $isFollowing,
+      'pageTitle' => (string) $store['nombre'] . ' | Emprendi',
+    ]);
+  } catch (PDOException $exception) {
+    error_log($exception->getMessage());
+    return $renderError($response, 500, 'No se pudo cargar el emprendimiento.');
+  }
+});
+
+$app->get('/mi-rendimiento', function ($request, $response) use ($renderer, $loginUrl, $renderError) {
+  $user = currentUser();
+  if ($user === null) {
+    return $response->withHeader('Location', $loginUrl('/mi-rendimiento'))->withStatus(303);
+  }
+
+  try {
+    $pdo = (new Database())->getConnection();
+    $sales = $pdo->prepare(
+      "SELECT COUNT(DISTINCT CASE WHEN c.estado_pago = 'aprobado' THEN c.id END) AS pedidos_pagados, COUNT(DISTINCT CASE WHEN c.estado_pago = 'aprobado' AND c.estado = 'entregado' THEN c.id END) AS pedidos_entregados, COALESCE(SUM(CASE WHEN c.estado_pago = 'aprobado' THEN i.cantidad ELSE 0 END), 0) AS unidades_pagadas, COALESCE(SUM(CASE WHEN c.estado_pago = 'aprobado' THEN i.precio_unitario * i.cantidad ELSE 0 END), 0) AS importe_bruto_pagado FROM compra_items i INNER JOIN compras c ON c.id = i.compra_id WHERE i.vendedor_id = :vendedor_id"
+    );
+    $sales->execute(['vendedor_id' => $user['id']]);
+    $followers = $pdo->prepare(
+      'SELECT COUNT(DISTINCT s.usuario_id) FROM emprendimiento_seguidores s INNER JOIN emprendimientos e ON e.id = s.emprendimiento_id WHERE e.usuario_id = :usuario_id'
+    );
+    $followers->execute(['usuario_id' => $user['id']]);
+    $products = $pdo->prepare(
+      "SELECT COUNT(*) FROM productos p INNER JOIN emprendimientos e ON e.id = p.emprendimiento_id WHERE p.usuario_id = :usuario_id AND p.estado = 'aprobado' AND e.estado = 'activo'"
+    );
+    $products->execute(['usuario_id' => $user['id']]);
+
+    return view($renderer, $response, '/vendedores/rendimiento.php', [
+      'metricas' => $sales->fetch() ?: [],
+      'seguidores' => (int) $followers->fetchColumn(),
+      'productosAprobados' => (int) $products->fetchColumn(),
+    ]);
+  } catch (Throwable $exception) {
+    error_log($exception->getMessage());
+    return $renderError($response, 500, 'No se pudo cargar el panel de rendimiento.');
+  }
+});
+
+$app->get('/nosotros', static function ($request, $response) use ($renderer) {
+  return view($renderer, $response, '/informacion/nosotros.php', [
+    'pageTitle' => 'Nosotros | Emprendi',
+  ]);
+});
+
+$app->get('/ayuda', static function ($request, $response) use ($renderer) {
+  $supportEmail = trim((string) ($_ENV['SUPPORT_EMAIL'] ?? ''));
+  if (filter_var($supportEmail, FILTER_VALIDATE_EMAIL) === false) {
+    $supportEmail = null;
+  }
+
+  return view($renderer, $response, '/informacion/ayuda.php', [
+    'pageTitle' => 'Ayuda y soporte | Emprendi',
+    'supportEmail' => $supportEmail,
+  ]);
+});
 
 $app->get('/', function ($request, $response) use ($renderer) {
   $queryParams = $request->getQueryParams();
@@ -134,7 +1010,7 @@ $app->get('/', function ($request, $response) use ($renderer) {
       $error = 'La categoría seleccionada no es válida.';
     }
 
-    $names = $pdo->query("SELECT DISTINCT nombre FROM productos WHERE estado = 'aprobado' ORDER BY nombre LIMIT 200")->fetchAll(PDO::FETCH_COLUMN);
+    $names = $pdo->query("SELECT DISTINCT p.nombre FROM productos p INNER JOIN emprendimientos e ON e.id = p.emprendimiento_id INNER JOIN usuarios u ON u.id = e.usuario_id WHERE p.estado = 'aprobado' AND e.estado = 'activo' AND u.estado = 'activo' ORDER BY p.nombre LIMIT 200")->fetchAll(PDO::FETCH_COLUMN);
     foreach ($names as $name) {
       $name = trim((string) $name);
       if ($name !== '') {
@@ -150,7 +1026,10 @@ $app->get('/', function ($request, $response) use ($renderer) {
     $tags = array_values(array_unique($tags));
 
     if ($error === null) {
-      $conditions = ["estado = 'aprobado'"];
+      $conditions = [
+        "p.estado = 'aprobado'",
+        "EXISTS (SELECT 1 FROM emprendimientos e INNER JOIN usuarios u ON u.id = e.usuario_id WHERE e.id = p.emprendimiento_id AND e.estado = 'activo' AND u.estado = 'activo')",
+      ];
       $parameters = [];
       if ($search !== '') {
       $terms = preg_split('/\s+/u', $search, -1, PREG_SPLIT_NO_EMPTY) ?: [$search];
@@ -171,19 +1050,19 @@ $app->get('/', function ($request, $response) use ($renderer) {
         $parameters['category'] = $category;
       }
       if ($minimumPrice !== '') {
-        $conditions[] = 'precio >= :precio_min';
+        $conditions[] = currentProductPriceSql('p') . ' >= :precio_min';
         $parameters['precio_min'] = $minimumPrice;
       }
       if ($maximumPrice !== '') {
-        $conditions[] = 'precio <= :precio_max';
+        $conditions[] = currentProductPriceSql('p') . ' <= :precio_max';
         $parameters['precio_max'] = $maximumPrice;
       }
       $where = ' WHERE ' . implode(' AND ', $conditions);
-      $count = $pdo->prepare('SELECT COUNT(*) FROM productos' . $where);
+      $count = $pdo->prepare('SELECT COUNT(*) FROM productos p' . $where);
       $count->execute($parameters);
       $totalProducts = (int) $count->fetchColumn();
       $stmt = $pdo->prepare(
-        'SELECT p.id, p.nombre, p.precio, p.descripcion, p.usuario_id, p.categoria, p.condicion, p.unidad, p.cantidad_minima, p.stock, COALESCE(r.promedio, 0) AS promedio_resenas, COALESCE(r.cantidad, 0) AS cantidad_resenas FROM productos p LEFT JOIN (SELECT producto_id, AVG(puntaje) AS promedio, COUNT(*) AS cantidad FROM producto_resenas GROUP BY producto_id) r ON r.producto_id = p.id'
+        'SELECT p.id, p.nombre, p.precio AS precio_original, ' . currentProductPriceSql('p') . ' AS precio, ' . productOfferActiveSql('p') . ' AS oferta_vigente, p.oferta_precio, p.oferta_fin, p.descripcion, p.usuario_id, p.emprendimiento_id, p.categoria, p.condicion, p.unidad, p.cantidad_minima, p.stock, COALESCE(r.promedio, 0) AS promedio_resenas, COALESCE(r.cantidad, 0) AS cantidad_resenas FROM productos p LEFT JOIN (SELECT producto_id, AVG(puntaje) AS promedio, COUNT(*) AS cantidad FROM producto_resenas GROUP BY producto_id) r ON r.producto_id = p.id'
         . $where . catalogOrderBy($sort) . ' LIMIT :limit OFFSET :offset'
       );
       foreach ($parameters as $key => $value) {
@@ -228,12 +1107,25 @@ $app->get('/', function ($request, $response) use ($renderer) {
 
 $app->get('/productos', static fn($request, $response) => $response->withHeader('Location', '/')->withStatus(301));
 
-$app->get('/productos/create', function ($request, $response) use ($renderer, $loginUrl) {
-  if (currentUser() === null) {
+$app->get('/productos/create', function ($request, $response) use ($renderer, $loginUrl, $renderError) {
+  $user = currentUser();
+  if ($user === null) {
     return $response->withHeader('Location', $loginUrl('/productos/create'))->withStatus(303);
   }
 
-  return view($renderer, $response, '/productos/create/create.php');
+  try {
+    $pdo = (new Database())->getConnection();
+    $stmt = $pdo->prepare(
+      "SELECT id, nombre FROM emprendimientos WHERE usuario_id = :usuario_id AND estado = 'activo' ORDER BY nombre"
+    );
+    $stmt->execute(['usuario_id' => $user['id']]);
+    return view($renderer, $response, '/productos/create/create.php', [
+      'emprendimientos' => $stmt->fetchAll(),
+    ]);
+  } catch (PDOException $exception) {
+    error_log($exception->getMessage());
+    return $renderError($response, 500, 'No se pudieron cargar tus emprendimientos.');
+  }
 });
 
 $app->get('/productos/{id}/editar', function ($request, $response, array $args) use ($renderer, $renderError) {
@@ -245,7 +1137,7 @@ $app->get('/productos/{id}/editar', function ($request, $response, array $args) 
   try {
     $pdo = (new Database())->getConnection();
     $stmt = $pdo->prepare(
-      'SELECT id, nombre, precio, descripcion, categoria, condicion, unidad, cantidad_minima, stock, motivo_revision FROM productos WHERE id = :id AND usuario_id = :usuario_id'
+      'SELECT id, nombre, precio, descripcion, categoria, condicion, unidad, cantidad_minima, stock, motivo_revision, emprendimiento_id FROM productos WHERE id = :id AND usuario_id = :usuario_id'
     );
     $stmt->execute(['id' => (int) $args['id'], 'usuario_id' => $user['id']]);
     $producto = $stmt->fetch();
@@ -255,10 +1147,15 @@ $app->get('/productos/{id}/editar', function ($request, $response, array $args) 
     }
 
     $producto['imagenes'] = productImages($pdo, (int) $producto['id']);
+    $stores = $pdo->prepare(
+      "SELECT id, nombre FROM emprendimientos WHERE usuario_id = :usuario_id AND estado = 'activo' ORDER BY nombre"
+    );
+    $stores->execute(['usuario_id' => $user['id']]);
 
     return view($renderer, $response, '/productos/update/update.php', [
       'producto' => $producto,
       'categorias' => productCategories(),
+      'emprendimientos' => $stores->fetchAll(),
     ]);
   } catch (PDOException $exception) {
     error_log($exception->getMessage());
@@ -271,7 +1168,7 @@ $app->get('/productos/{id}', function ($request, $response, array $args) use ($r
     $currentUser = currentUser();
     $pdo = (new Database())->getConnection();
     $stmt = $pdo->prepare(
-      'SELECT p.id, p.nombre, p.precio, p.descripcion, p.usuario_id, p.categoria, p.estado, p.motivo_revision, p.condicion, p.unidad, p.cantidad_minima, p.stock, u.nombre AS vendedor_nombre, u.localidad AS vendedor_localidad, u.provincia AS vendedor_provincia, u.descripcion_vendedor FROM productos p LEFT JOIN usuarios u ON u.id = p.usuario_id WHERE p.id = :id'
+      'SELECT p.id, p.nombre, p.precio AS precio_original, ' . currentProductPriceSql('p') . ' AS precio, ' . productOfferActiveSql('p') . ' AS oferta_vigente, p.oferta_fin, p.oferta_precio, p.descripcion, p.usuario_id, p.emprendimiento_id, p.categoria, p.estado, p.motivo_revision, p.condicion, p.unidad, p.cantidad_minima, p.stock, e.nombre AS vendedor_nombre, e.localidad AS vendedor_localidad, e.provincia AS vendedor_provincia, e.descripcion AS descripcion_vendedor, e.estado AS emprendimiento_estado, u.estado AS vendedor_estado FROM productos p LEFT JOIN emprendimientos e ON e.id = p.emprendimiento_id LEFT JOIN usuarios u ON u.id = p.usuario_id WHERE p.id = :id'
     );
     $stmt->execute(['id' => (int) $args['id']]);
     $producto = $stmt->fetch();
@@ -279,7 +1176,7 @@ $app->get('/productos/{id}', function ($request, $response, array $args) use ($r
     if (
       $producto === false
       || (
-        $producto['estado'] !== 'aprobado'
+        ($producto['estado'] !== 'aprobado' || $producto['emprendimiento_estado'] !== 'activo' || $producto['vendedor_estado'] !== 'activo')
         && ($currentUser === null || (int) $producto['usuario_id'] !== $currentUser['id'])
       )
     ) {
@@ -317,7 +1214,7 @@ $app->get('/productos/{id}', function ($request, $response, array $args) use ($r
   }
 });
 
-$app->get('/vendedores/{id}', function ($request, $response, array $args) use ($renderer, $renderError) {
+$app->get('/vendedores/{id}', function ($request, $response, array $args) use ($renderError) {
   $id = filter_var($args['id'] ?? null, FILTER_VALIDATE_INT);
   if ($id === false || $id < 1) {
     return $renderError($response, 404, 'No encontramos ese vendedor.');
@@ -325,30 +1222,18 @@ $app->get('/vendedores/{id}', function ($request, $response, array $args) use ($
 
   try {
     $pdo = (new Database())->getConnection();
-    $sellerQuery = $pdo->prepare(
-      "SELECT id, nombre, localidad, provincia, descripcion_vendedor FROM usuarios WHERE id = :id AND estado = 'activo'"
+    $storeQuery = $pdo->prepare(
+      "SELECT e.id FROM emprendimientos e INNER JOIN usuarios u ON u.id = e.usuario_id WHERE e.usuario_id = :usuario_id AND e.estado = 'activo' AND u.estado = 'activo' ORDER BY e.id ASC LIMIT 1"
     );
-    $sellerQuery->execute(['id' => $id]);
-    $seller = $sellerQuery->fetch();
-    if ($seller === false) {
+    $storeQuery->execute(['usuario_id' => $id]);
+    $storeId = $storeQuery->fetchColumn();
+    if ($storeId === false) {
       return $renderError($response, 404, 'No encontramos ese vendedor.');
     }
 
-    $productsQuery = $pdo->prepare(
-      "SELECT p.id, p.nombre, p.precio, p.descripcion, p.categoria, p.condicion, p.unidad, p.cantidad_minima, p.stock, COALESCE(r.promedio, 0) AS promedio_resenas, COALESCE(r.cantidad, 0) AS cantidad_resenas FROM productos p LEFT JOIN (SELECT producto_id, AVG(puntaje) AS promedio, COUNT(*) AS cantidad FROM producto_resenas GROUP BY producto_id) r ON r.producto_id = p.id WHERE p.usuario_id = :usuario_id AND p.estado = 'aprobado' ORDER BY p.id DESC LIMIT 48"
-    );
-    $productsQuery->execute(['usuario_id' => $id]);
-    $sellerProducts = attachProductImages($pdo, $productsQuery->fetchAll());
-    $sellerRating = $pdo->prepare(
-      'SELECT AVG(puntaje) AS promedio, COUNT(*) AS cantidad FROM producto_resenas WHERE vendedor_id = :vendedor_id'
-    );
-    $sellerRating->execute(['vendedor_id' => $id]);
-
-    return view($renderer, $response, '/vendedores/show.php', [
-      'seller' => $seller,
-      'sellerProducts' => $sellerProducts,
-      'sellerRating' => $sellerRating->fetch() ?: ['promedio' => null, 'cantidad' => 0],
-    ]);
+    return $response
+      ->withHeader('Location', '/emprendimientos/' . (int) $storeId)
+      ->withStatus(301);
   } catch (PDOException $exception) {
     error_log($exception->getMessage());
     return $renderError($response, 500, 'No se pudo cargar el perfil del vendedor.');
@@ -364,7 +1249,7 @@ $app->get('/favoritos', function ($request, $response) use ($renderer, $loginUrl
   try {
     $pdo = (new Database())->getConnection();
     $query = $pdo->prepare(
-      "SELECT p.id, p.nombre, p.precio, p.descripcion, p.categoria, p.condicion, p.unidad, p.cantidad_minima, p.stock FROM producto_favoritos f INNER JOIN productos p ON p.id = f.producto_id WHERE f.usuario_id = :usuario_id AND p.estado = 'aprobado' ORDER BY f.creado_en DESC"
+      "SELECT p.id, p.nombre, p.precio AS precio_original, " . currentProductPriceSql('p') . " AS precio, " . productOfferActiveSql('p') . " AS oferta_vigente, p.oferta_fin, p.descripcion, p.categoria, p.condicion, p.unidad, p.cantidad_minima, p.stock FROM producto_favoritos f INNER JOIN productos p ON p.id = f.producto_id INNER JOIN emprendimientos e ON e.id = p.emprendimiento_id WHERE f.usuario_id = :usuario_id AND p.estado = 'aprobado' AND e.estado = 'activo' ORDER BY f.creado_en DESC"
     );
     $query->execute(['usuario_id' => $user['id']]);
     return view($renderer, $response, '/productos/favoritos.php', [
@@ -396,9 +1281,10 @@ $app->post('/productos/{id}/reportar', function ($request, $response, array $arg
     return $response->withHeader('Location', $loginUrl('/productos/' . $id))->withStatus(303);
   }
 
+  $pdo = null;
   try {
     $pdo = (new Database())->getConnection();
-    $product = $pdo->prepare("SELECT id FROM productos WHERE id = :id AND estado = 'aprobado'");
+    $product = $pdo->prepare("SELECT p.id FROM productos p INNER JOIN emprendimientos e ON e.id = p.emprendimiento_id WHERE p.id = :id AND p.estado = 'aprobado' AND e.estado = 'activo'");
     $product->execute(['id' => $id]);
     if ($product->fetchColumn() === false) {
       return $renderError($response, 404, 'No encontramos ese producto.');
@@ -410,6 +1296,7 @@ $app->post('/productos/{id}/reportar', function ($request, $response, array $arg
       $_SESSION['flash'] = 'Ya enviaste un reporte de esta publicación; el equipo lo revisará.';
       return $response->withHeader('Location', '/productos/' . $id)->withStatus(303);
     }
+    $pdo->beginTransaction();
     $insert = $pdo->prepare(
       'INSERT INTO producto_reportes (producto_id, usuario_id, motivo, detalle) VALUES (:producto_id, :usuario_id, :motivo, :detalle)'
     );
@@ -419,12 +1306,85 @@ $app->post('/productos/{id}/reportar', function ($request, $response, array $arg
       'motivo' => $reason,
       'detalle' => $detail,
     ]);
+    recordAuditEvent($pdo, 'reportar_producto', 'producto_reporte', (int) $pdo->lastInsertId(), 'Se recibió un reporte de publicación.', 'usuario:' . $user['id']);
     $pdo->prepare('UPDATE productos SET reportes = reportes + 1 WHERE id = :id')->execute(['id' => $id]);
+    $pdo->commit();
     $_SESSION['flash'] = 'Gracias por avisarnos. El equipo revisará esta publicación.';
     return $response->withHeader('Location', '/productos/' . $id)->withStatus(303);
-  } catch (PDOException $exception) {
+  } catch (Throwable $exception) {
+    if ($pdo instanceof PDO && $pdo->inTransaction()) {
+      $pdo->rollBack();
+    }
     error_log($exception->getMessage());
     return $renderError($response, 500, 'No se pudo enviar el reporte.');
+  }
+});
+
+$app->post('/usuarios/{id}/reportar', function ($request, $response, array $args) use ($requireCsrf, $renderError, $loginUrl) {
+  if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
+    return $csrfFailure;
+  }
+
+  $id = filter_var($args['id'] ?? null, FILTER_VALIDATE_INT);
+  $user = currentUser();
+  $data = $request->getParsedBody() ?? [];
+  $reason = (string) ($data['motivo'] ?? '');
+  $detail = trim((string) ($data['detalle'] ?? ''));
+  $reasons = ['informacion_falsa', 'fraude', 'acoso', 'suplantacion', 'otro'];
+  if (
+    $id === false || $id < 1
+    || !in_array($reason, $reasons, true)
+    || mb_strlen($detail) < 10
+    || mb_strlen($detail) > 500
+  ) {
+    $_SESSION['flash'] = 'Elegí un motivo válido y explicalo en al menos 10 caracteres.';
+    return $response->withHeader('Location', '/emprendimientos')->withStatus(303);
+  }
+  if ($user === null) {
+    return $response->withHeader('Location', $loginUrl('/emprendimientos'))->withStatus(303);
+  }
+  if ((int) $user['id'] === $id) {
+    $_SESSION['flash'] = 'No podés reportar tu propia cuenta.';
+    return $response->withHeader('Location', '/emprendimientos')->withStatus(303);
+  }
+
+  try {
+    $pdo = (new Database())->getConnection();
+    $target = $pdo->prepare("SELECT id FROM usuarios WHERE id = :id AND estado = 'activo'");
+    $target->execute(['id' => $id]);
+    if ($target->fetchColumn() === false) {
+      return $renderError($response, 404, 'No encontramos esa cuenta.');
+    }
+
+    $existing = $pdo->prepare(
+      "SELECT id FROM usuario_reportes WHERE usuario_reportado_id = :reportado AND usuario_reportante_id = :reportante AND estado = 'pendiente' LIMIT 1"
+    );
+    $existing->execute(['reportado' => $id, 'reportante' => $user['id']]);
+    if ($existing->fetchColumn() !== false) {
+      $_SESSION['flash'] = 'Ya enviaste un reporte de esta cuenta; el equipo lo revisará.';
+      return $response->withHeader('Location', '/emprendimientos')->withStatus(303);
+    }
+
+    $pdo->beginTransaction();
+    $insert = $pdo->prepare(
+      'INSERT INTO usuario_reportes (usuario_reportado_id, usuario_reportante_id, motivo, detalle) VALUES (:reportado, :reportante, :motivo, :detalle)'
+    );
+    $insert->execute([
+      'reportado' => $id,
+      'reportante' => $user['id'],
+      'motivo' => $reason,
+      'detalle' => $detail,
+    ]);
+    recordAuditEvent($pdo, 'reportar_usuario', 'usuario_reporte', (int) $pdo->lastInsertId(), 'Se recibió un reporte de cuenta.', 'usuario:' . $user['id']);
+    $pdo->commit();
+    $_SESSION['flash'] = 'Gracias por avisarnos. El equipo revisará esta cuenta.';
+    return $response->withHeader('Location', '/emprendimientos')->withStatus(303);
+  } catch (Throwable $exception) {
+    if (isset($pdo) && $pdo instanceof PDO && $pdo->inTransaction()) {
+      $pdo->rollBack();
+    }
+    error_log($exception->getMessage());
+    return $renderError($response, 500, 'No se pudo enviar el reporte de cuenta.');
   }
 });
 
@@ -444,7 +1404,7 @@ $app->post('/productos/{id}/favorito', function ($request, $response, array $arg
 
   try {
     $pdo = (new Database())->getConnection();
-    $check = $pdo->prepare("SELECT id FROM productos WHERE id = :id AND estado = 'aprobado'");
+    $check = $pdo->prepare("SELECT p.id FROM productos p INNER JOIN emprendimientos e ON e.id = p.emprendimiento_id WHERE p.id = :id AND p.estado = 'aprobado' AND e.estado = 'activo'");
     $check->execute(['id' => $id]);
     if ($check->fetchColumn() === false) {
       return $renderError($response, 404, 'No encontramos ese producto.');
@@ -473,6 +1433,204 @@ $app->get('/usuarios/login', function ($request, $response) use ($renderer) {
   return view($renderer, $response, '/usuario/login.php', [
     'returnTo' => safeReturnPath($request->getQueryParams()['return_to'] ?? '/'),
   ]);
+});
+
+$app->get('/usuarios/recuperar', function ($request, $response) use ($renderer, $getSmtpConfig) {
+  return view($renderer, $response, '/usuario/recover.php', [
+    'smtpConfigured' => $getSmtpConfig() !== null,
+  ]);
+});
+
+$app->post('/usuarios/recuperar', function ($request, $response) use ($renderer, $requireCsrf, $getSmtpConfig, $sendPasswordResetEmail) {
+  if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
+    return $csrfFailure;
+  }
+
+  $smtpConfig = $getSmtpConfig();
+  if ($smtpConfig === null) {
+    return view($renderer, $response->withStatus(503), '/usuario/recover.php', [
+      'smtpConfigured' => false,
+      'error' => 'La recuperación por correo no está configurada. Contactá al soporte del sitio.',
+    ]);
+  }
+
+  $email = strtolower(trim((string) (($request->getParsedBody() ?? [])['gmail'] ?? '')));
+  if (!filter_var($email, FILTER_VALIDATE_EMAIL) || strlen($email) > 255) {
+    return view($renderer, $response->withStatus(422), '/usuario/recover.php', [
+      'smtpConfigured' => true,
+      'email' => $email,
+      'error' => 'Ingresá una dirección de correo válida.',
+    ]);
+  }
+
+  try {
+    $pdo = (new Database())->getConnection();
+    $pdo->beginTransaction();
+    $pdo->exec('DELETE FROM password_reset_tokens WHERE expires_at <= CURRENT_TIMESTAMP');
+    $userQuery = $pdo->prepare(
+      "SELECT id, gmail FROM usuarios WHERE LOWER(gmail) = :gmail AND estado = 'activo' FOR UPDATE"
+    );
+    $userQuery->execute(['gmail' => $email]);
+    $account = $userQuery->fetch();
+    if ($account === false) {
+      $pdo->commit();
+      return view($renderer, $response, '/usuario/recover.php', [
+        'smtpConfigured' => true,
+        'sent' => true,
+      ]);
+    }
+
+    $recentToken = $pdo->prepare(
+      'SELECT id FROM password_reset_tokens WHERE usuario_id = :usuario_id AND created_at >= DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 1 MINUTE) LIMIT 1'
+    );
+    $recentToken->execute(['usuario_id' => $account['id']]);
+    if ($recentToken->fetchColumn() !== false) {
+      $pdo->commit();
+      return view($renderer, $response, '/usuario/recover.php', [
+        'smtpConfigured' => true,
+        'sent' => true,
+      ]);
+    }
+
+    $token = bin2hex(random_bytes(32));
+    $tokenHash = hash('sha256', $token);
+    $pdo->prepare('DELETE FROM password_reset_tokens WHERE usuario_id = :usuario_id')
+      ->execute(['usuario_id' => $account['id']]);
+    $insert = $pdo->prepare(
+      'INSERT INTO password_reset_tokens (usuario_id, token_hash, expires_at) VALUES (:usuario_id, :token_hash, DATE_ADD(CURRENT_TIMESTAMP, INTERVAL 1 HOUR))'
+    );
+    $insert->execute([
+      'usuario_id' => $account['id'],
+      'token_hash' => $tokenHash,
+    ]);
+    $pdo->commit();
+
+    try {
+      $sendPasswordResetEmail((string) $account['gmail'], $token, $smtpConfig);
+    } catch (Throwable $mailException) {
+      error_log('No se pudo enviar un correo de recuperación: ' . $mailException->getMessage());
+      $pdo->prepare('DELETE FROM password_reset_tokens WHERE token_hash = :token_hash AND used_at IS NULL')
+        ->execute(['token_hash' => $tokenHash]);
+      return view($renderer, $response->withStatus(503), '/usuario/recover.php', [
+        'smtpConfigured' => true,
+        'error' => 'No se pudo enviar el correo de recuperación. Intentá nuevamente más tarde.',
+      ]);
+    }
+
+    return view($renderer, $response, '/usuario/recover.php', [
+      'smtpConfigured' => true,
+      'sent' => true,
+    ]);
+  } catch (Throwable $exception) {
+    if (isset($pdo) && $pdo->inTransaction()) {
+      $pdo->rollBack();
+    }
+    error_log($exception->getMessage());
+    return view($renderer, $response->withStatus(500), '/usuario/recover.php', [
+      'smtpConfigured' => true,
+      'error' => 'No se pudo procesar la recuperación. Intentá nuevamente más tarde.',
+    ]);
+  }
+});
+
+$app->get('/usuarios/restablecer', function ($request, $response) use ($renderer, $renderError) {
+  $response = $response
+    ->withHeader('Cache-Control', 'no-store')
+    ->withHeader('Referrer-Policy', 'no-referrer')
+    ->withHeader('X-Robots-Tag', 'noindex');
+  $token = (string) ($request->getQueryParams()['token'] ?? '');
+  if (!preg_match('/\A[a-f0-9]{64}\z/', $token)) {
+    return $renderError($response, 400, 'El enlace de recuperación no es válido o venció.');
+  }
+
+  try {
+    $stmt = (new Database())->getConnection()->prepare(
+      'SELECT id FROM password_reset_tokens WHERE token_hash = :token_hash AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP'
+    );
+    $stmt->execute(['token_hash' => hash('sha256', $token)]);
+    if ($stmt->fetchColumn() === false) {
+      return $renderError($response, 400, 'El enlace de recuperación no es válido o venció.');
+    }
+
+    return view($renderer, $response, '/usuario/reset-password.php', [
+      'token' => $token,
+    ]);
+  } catch (Throwable $exception) {
+    error_log($exception->getMessage());
+    return $renderError($response, 500, 'No se pudo validar el enlace de recuperación.');
+  }
+});
+
+$app->post('/usuarios/restablecer', function ($request, $response) use ($renderer, $requireCsrf) {
+  $response = $response
+    ->withHeader('Cache-Control', 'no-store')
+    ->withHeader('Referrer-Policy', 'no-referrer')
+    ->withHeader('X-Robots-Tag', 'noindex');
+  if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
+    return $csrfFailure;
+  }
+
+  $data = $request->getParsedBody() ?? [];
+  $token = (string) ($data['token'] ?? '');
+  $password = (string) ($data['password'] ?? '');
+  $confirmation = (string) ($data['password_confirmation'] ?? '');
+  if (!preg_match('/\A[a-f0-9]{64}\z/', $token)) {
+    return view($renderer, $response->withStatus(400), '/usuario/reset-password.php', [
+      'error' => 'El enlace de recuperación no es válido o venció.',
+    ]);
+  }
+  if (strlen($password) < 8 || strlen($password) > 72) {
+    return view($renderer, $response->withStatus(422), '/usuario/reset-password.php', [
+      'token' => $token,
+      'error' => 'La contraseña debe tener entre 8 y 72 bytes.',
+    ]);
+  }
+  if ($password !== $confirmation) {
+    return view($renderer, $response->withStatus(422), '/usuario/reset-password.php', [
+      'token' => $token,
+      'error' => 'Las contraseñas no coinciden.',
+    ]);
+  }
+
+  $pdo = null;
+  try {
+    $pdo = (new Database())->getConnection();
+    $pdo->beginTransaction();
+    $stmt = $pdo->prepare(
+      "SELECT t.id, t.usuario_id FROM password_reset_tokens t INNER JOIN usuarios u ON u.id = t.usuario_id WHERE t.token_hash = :token_hash AND t.used_at IS NULL AND t.expires_at > CURRENT_TIMESTAMP AND u.estado = 'activo' FOR UPDATE"
+    );
+    $stmt->execute(['token_hash' => hash('sha256', $token)]);
+    $reset = $stmt->fetch();
+    if ($reset === false) {
+      $pdo->rollBack();
+      return view($renderer, $response->withStatus(400), '/usuario/reset-password.php', [
+        'error' => 'El enlace de recuperación no es válido o venció.',
+      ]);
+    }
+
+    $update = $pdo->prepare(
+      "UPDATE usuarios SET password_hash = :password_hash WHERE id = :id AND estado = 'activo'"
+    );
+    $update->execute([
+      'password_hash' => password_hash($password, PASSWORD_DEFAULT),
+      'id' => $reset['usuario_id'],
+    ]);
+    $pdo->prepare(
+      'UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE usuario_id = :usuario_id AND used_at IS NULL'
+    )->execute(['usuario_id' => $reset['usuario_id']]);
+    $pdo->commit();
+    $_SESSION['flash'] = 'Tu contraseña se actualizó. Ya podés iniciar sesión.';
+    return $response->withHeader('Location', '/usuarios/login')->withStatus(303);
+  } catch (Throwable $exception) {
+    if ($pdo instanceof PDO && $pdo->inTransaction()) {
+      $pdo->rollBack();
+    }
+    error_log($exception->getMessage());
+    return view($renderer, $response->withStatus(500), '/usuario/reset-password.php', [
+      'token' => $token,
+      'error' => 'No se pudo actualizar la contraseña. Intentá nuevamente más tarde.',
+    ]);
+  }
 });
 
 $app->post('/usuarios', function ($request, $response) use ($renderer, $requireCsrf) {
@@ -513,9 +1671,9 @@ $app->post('/usuarios', function ($request, $response) use ($renderer, $requireC
     ]);
   }
 
-  if (strlen($password) < 8) {
+  if (strlen($password) < 8 || strlen($password) > 72) {
     return view($renderer, $response->withStatus(422), '/usuario/register.php', [
-      'error' => 'La contraseña debe tener al menos 8 caracteres.',
+      'error' => 'La contraseña debe tener entre 8 y 72 bytes.',
       'formData' => $user,
     ]);
   }
@@ -538,6 +1696,7 @@ $app->post('/usuarios', function ($request, $response) use ($renderer, $requireC
       ]);
     }
 
+    $pdo->beginTransaction();
     $stmt = $pdo->prepare(
       'INSERT INTO usuarios (nombre, rol, gmail, telefono, direccion, localidad, provincia, codigo_postal, password_hash) VALUES (:nombre, :rol, :gmail, :telefono, :direccion, :localidad, :provincia, :codigo_postal, :password_hash)'
     );
@@ -546,8 +1705,19 @@ $app->post('/usuarios', function ($request, $response) use ($renderer, $requireC
       'rol' => 'usuario',
       'password_hash' => password_hash($password, PASSWORD_DEFAULT),
     ]);
+    $userId = (int) $pdo->lastInsertId();
+    $store = $pdo->prepare(
+      "INSERT INTO emprendimientos (usuario_id, nombre, localidad, provincia, estado) VALUES (:usuario_id, :nombre, :localidad, :provincia, 'activo')"
+    );
+    $store->execute([
+      'usuario_id' => $userId,
+      'nombre' => mb_substr('Emprendimiento de ' . $user['nombre'], 0, 255),
+      'localidad' => $user['localidad'] !== '' ? $user['localidad'] : null,
+      'provincia' => $user['provincia'] !== '' ? $user['provincia'] : null,
+    ]);
+    $pdo->commit();
     setAuthenticatedUser([
-      'id' => (int) $pdo->lastInsertId(),
+      'id' => $userId,
       'nombre' => $user['nombre'],
       'gmail' => $user['gmail'],
     ]);
@@ -555,6 +1725,9 @@ $app->post('/usuarios', function ($request, $response) use ($renderer, $requireC
 
     return $response->withHeader('Location', '/perfil')->withStatus(303);
   } catch (PDOException $exception) {
+    if (isset($pdo) && $pdo->inTransaction()) {
+      $pdo->rollBack();
+    }
     if (($exception->errorInfo[1] ?? null) === 1062) {
       return view($renderer, $response->withStatus(409), '/usuario/register.php', [
         'error' => 'Ese correo ya está registrado. Iniciá sesión o usá otro correo.',
@@ -694,11 +1867,11 @@ $app->post('/perfil', function ($request, $response) use ($renderer, $requireCsr
     || strlen($profile['provincia']) > 100
     || strlen($profile['codigo_postal']) > 12
     || strlen($profile['descripcion_vendedor']) > 500
-    || ($password !== '' && strlen($password) < 8)
+    || ($password !== '' && (strlen($password) < 8 || strlen($password) > 72))
   ) {
     return view($renderer, $response->withStatus(422), '/usuario/profile.php', [
       'profile' => $profile,
-      'error' => 'Revisá los datos. Si cambiás la contraseña, debe tener al menos 8 caracteres.',
+      'error' => 'Revisá los datos. Si cambiás la contraseña, debe tener entre 8 y 72 bytes.',
     ]);
   }
 
@@ -721,6 +1894,7 @@ $app->post('/perfil', function ($request, $response) use ($renderer, $requireCsr
     }
     $sql .= ' WHERE id = :id';
     $pdo->prepare($sql)->execute($params);
+    recordAuditEvent($pdo, 'editar_perfil', 'usuario', $user['id'], 'El usuario actualizó sus datos de perfil.', 'usuario:' . $user['id']);
     setAuthenticatedUser(['id' => $user['id'], ...$profile]);
     $_SESSION['flash'] = 'Tu perfil se actualizó correctamente.';
 
@@ -743,7 +1917,7 @@ $app->get('/mis-productos', function ($request, $response) use ($renderer, $logi
   try {
     $pdo = (new Database())->getConnection();
     $stmt = $pdo->prepare(
-      'SELECT id, nombre, precio, descripcion, categoria, condicion, unidad, cantidad_minima, stock, estado, motivo_revision FROM productos WHERE usuario_id = :usuario_id ORDER BY id DESC'
+      'SELECT p.id, p.nombre, p.precio, p.descripcion, p.categoria, p.condicion, p.unidad, p.cantidad_minima, p.stock, p.estado, p.motivo_revision, p.oferta_precio, p.oferta_inicio, p.oferta_fin, p.oferta_estado, p.oferta_motivo_revision, e.nombre AS emprendimiento_nombre, e.estado AS emprendimiento_estado FROM productos p LEFT JOIN emprendimientos e ON e.id = p.emprendimiento_id WHERE p.usuario_id = :usuario_id ORDER BY p.id DESC'
     );
     $stmt->execute(['usuario_id' => $user['id']]);
     $productos = attachProductImages($pdo, $stmt->fetchAll());
@@ -757,7 +1931,7 @@ $app->get('/mis-productos', function ($request, $response) use ($renderer, $logi
   }
 });
 
-$app->post('/productos', function ($request, $response) use ($renderer, $requireCsrf, $loginUrl) {
+$app->post('/productos', function ($request, $response) use ($renderer, $requireCsrf, $loginUrl, $renderError) {
   if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
     return $csrfFailure;
   }
@@ -778,20 +1952,43 @@ $app->post('/productos', function ($request, $response) use ($renderer, $require
     'cantidad_minima' => trim((string) ($data['cantidad_minima'] ?? '')),
     'stock' => trim((string) ($data['stock'] ?? '')),
   ];
+  $emprendimientoId = filter_var($data['emprendimiento_id'] ?? null, FILTER_VALIDATE_INT);
   $categories = productCategories();
   $uploads = $request->getUploadedFiles()['imagenes'] ?? [];
+
+  try {
+    $pdo = (new Database())->getConnection();
+    $stores = $pdo->prepare(
+      "SELECT id, nombre FROM emprendimientos WHERE usuario_id = :usuario_id AND estado = 'activo' ORDER BY nombre"
+    );
+    $stores->execute(['usuario_id' => $user['id']]);
+    $emprendimientos = $stores->fetchAll();
+  } catch (PDOException $exception) {
+    error_log($exception->getMessage());
+    return $renderError($response, 500, 'No se pudieron cargar tus emprendimientos.');
+  }
 
   if (!isValidProductPublication($product, ($data['producto_real'] ?? '') === '1')) {
     return view($renderer, $response->withStatus(422), '/productos/create/create.php', [
       'error' => 'Revisá los datos: usá un nombre de al menos 3 caracteres, una descripción de 30 caracteres y 4 palabras como mínimo, un precio mayor a cero, una categoría válida y confirmá que es un producto real.',
       'producto' => $product,
       'categorias' => $categories,
+      'emprendimientoId' => $emprendimientoId === false ? '' : $emprendimientoId,
+      'emprendimientos' => $emprendimientos,
     ]);
   }
 
   $savedImages = [];
   try {
-    $pdo = (new Database())->getConnection();
+    if ($emprendimientoId === false || $emprendimientoId < 1) {
+      return view($renderer, $response->withStatus(422), '/productos/create/create.php', [
+        'error' => 'Elegí un emprendimiento activo para publicar el producto.',
+        'producto' => $product,
+        'categorias' => $categories,
+        'emprendimientos' => $emprendimientos,
+      ]);
+    }
+
     $pdo->beginTransaction();
     $accountLock = $pdo->prepare('SELECT id FROM usuarios WHERE id = :id FOR UPDATE');
     $accountLock->execute(['id' => $user['id']]);
@@ -800,17 +1997,33 @@ $app->post('/productos', function ($request, $response) use ($renderer, $require
       return $response->withHeader('Location', '/usuarios/login')->withStatus(303);
     }
 
+    $storeLock = $pdo->prepare(
+      "SELECT id FROM emprendimientos WHERE id = :id AND usuario_id = :usuario_id AND estado = 'activo' FOR UPDATE"
+    );
+    $storeLock->execute(['id' => $emprendimientoId, 'usuario_id' => $user['id']]);
+    if ($storeLock->fetchColumn() === false) {
+      $pdo->rollBack();
+      return view($renderer, $response->withStatus(422), '/productos/create/create.php', [
+        'error' => 'El emprendimiento seleccionado no está disponible.',
+        'producto' => $product,
+        'categorias' => $categories,
+        'emprendimientos' => $emprendimientos,
+      ]);
+    }
+
     enforceProductPublishingLimit($pdo, (int) $user['id']);
     $duplicate = $pdo->prepare(
-      'SELECT id FROM productos WHERE usuario_id = :usuario_id AND LOWER(nombre) = LOWER(:nombre)'
+      'SELECT id FROM productos WHERE emprendimiento_id = :emprendimiento_id AND LOWER(nombre) = LOWER(:nombre)'
     );
-    $duplicate->execute(['usuario_id' => $user['id'], 'nombre' => $product['nombre']]);
+    $duplicate->execute(['emprendimiento_id' => $emprendimientoId, 'nombre' => $product['nombre']]);
     if ($duplicate->fetchColumn() !== false) {
       $pdo->rollBack();
       return view($renderer, $response->withStatus(409), '/productos/create/create.php', [
         'error' => 'Ya tenés un producto con ese nombre. Editá la publicación existente en lugar de duplicarla.',
         'producto' => $product,
         'categorias' => $categories,
+        'emprendimientos' => $emprendimientos,
+        'emprendimientoId' => $emprendimientoId,
       ]);
     }
 
@@ -821,15 +2034,18 @@ $app->post('/productos', function ($request, $response) use ($renderer, $require
         'error' => 'Subí al menos una imagen del producto para poder publicarlo.',
         'producto' => $product,
         'categorias' => $categories,
+        'emprendimientos' => $emprendimientos,
+        'emprendimientoId' => $emprendimientoId,
       ]);
     }
     $savedImages = storeProductImages($imageFiles);
     $stmt = $pdo->prepare(
-      "INSERT INTO productos (nombre, precio, descripcion, categoria, condicion, unidad, cantidad_minima, stock, usuario_id, estado, busquedas) VALUES (:nombre, :precio, :descripcion, :categoria, :condicion, :unidad, :cantidad_minima, :stock, :usuario_id, 'pendiente', 0)"
+      "INSERT INTO productos (nombre, precio, descripcion, categoria, condicion, unidad, cantidad_minima, stock, usuario_id, emprendimiento_id, estado, busquedas) VALUES (:nombre, :precio, :descripcion, :categoria, :condicion, :unidad, :cantidad_minima, :stock, :usuario_id, :emprendimiento_id, 'pendiente', 0)"
     );
-    $stmt->execute([...$product, 'usuario_id' => $user['id']]);
+    $stmt->execute([...$product, 'usuario_id' => $user['id'], 'emprendimiento_id' => $emprendimientoId]);
     $productId = (int) $pdo->lastInsertId();
     insertProductImages($pdo, $productId, $savedImages);
+    recordAuditEvent($pdo, 'publicar_producto', 'producto', $productId, 'El producto se envió a revisión.', 'usuario:' . $user['id']);
     $pdo->commit();
     $_SESSION['flash'] = 'Tu producto se envió y quedó pendiente de revisión antes de aparecer en el catálogo.';
     return $response->withHeader('Location', '/mis-productos')->withStatus(303);
@@ -842,6 +2058,8 @@ $app->post('/productos', function ($request, $response) use ($renderer, $require
       'error' => $exception->getMessage(),
       'producto' => $product,
       'categorias' => $categories,
+      'emprendimientos' => $emprendimientos ?? [],
+      'emprendimientoId' => $emprendimientoId === false ? '' : $emprendimientoId,
     ]);
   } catch (ProductPublishingLimitException $exception) {
     if (isset($pdo) && $pdo->inTransaction()) {
@@ -851,6 +2069,8 @@ $app->post('/productos', function ($request, $response) use ($renderer, $require
       'error' => $exception->getMessage(),
       'producto' => $product,
       'categorias' => $categories,
+      'emprendimientos' => $emprendimientos ?? [],
+      'emprendimientoId' => $emprendimientoId === false ? '' : $emprendimientoId,
     ]);
   } catch (PDOException $exception) {
     if (isset($pdo) && $pdo->inTransaction()) {
@@ -862,6 +2082,8 @@ $app->post('/productos', function ($request, $response) use ($renderer, $require
       'error' => 'No se pudo guardar el producto. Intentá nuevamente más tarde.',
       'producto' => $product,
       'categorias' => $categories,
+      'emprendimientos' => $emprendimientos ?? [],
+      'emprendimientoId' => $emprendimientoId === false ? '' : $emprendimientoId,
     ]);
   } catch (RuntimeException $exception) {
     if (isset($pdo) && $pdo->inTransaction()) {
@@ -873,11 +2095,13 @@ $app->post('/productos', function ($request, $response) use ($renderer, $require
       'error' => 'No se pudieron procesar las imágenes o guardar el producto.',
       'producto' => $product,
       'categorias' => $categories,
+      'emprendimientos' => $emprendimientos ?? [],
+      'emprendimientoId' => $emprendimientoId === false ? '' : $emprendimientoId,
     ]);
   }
 });
 
-$app->post('/productos/{id}/actualizar', function ($request, $response, array $args) use ($renderer, $requireCsrf) {
+$app->post('/productos/{id}/actualizar', function ($request, $response, array $args) use ($renderer, $requireCsrf, $renderError) {
   if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
     return $csrfFailure;
   }
@@ -899,27 +2123,63 @@ $app->post('/productos/{id}/actualizar', function ($request, $response, array $a
     'stock' => trim((string) ($data['stock'] ?? '')),
   ];
   $id = (int) $args['id'];
+  $emprendimientoId = filter_var($data['emprendimiento_id'] ?? null, FILTER_VALIDATE_INT);
   $categories = productCategories();
   $uploads = $request->getUploadedFiles()['imagenes'] ?? [];
+
+  try {
+    $pdo = (new Database())->getConnection();
+    $storeQuery = $pdo->prepare(
+      "SELECT id, nombre FROM emprendimientos WHERE usuario_id = :usuario_id AND estado = 'activo' ORDER BY nombre"
+    );
+    $storeQuery->execute(['usuario_id' => $user['id']]);
+    $emprendimientos = $storeQuery->fetchAll();
+  } catch (PDOException $exception) {
+    error_log($exception->getMessage());
+    return $renderError($response, 500, 'No se pudieron cargar tus emprendimientos.');
+  }
 
   if (!isValidProductPublication($product, ($data['producto_real'] ?? '') === '1')) {
     return view($renderer, $response->withStatus(422), '/productos/update/update.php', [
       'error' => 'Revisá los datos: usá un nombre de al menos 3 caracteres, una descripción de 30 caracteres y 4 palabras como mínimo, un precio mayor a cero, una categoría válida y confirmá que es un producto real.',
       'producto' => [...$product, 'id' => $id],
       'categorias' => $categories,
+      'emprendimientos' => $emprendimientos,
+      'emprendimientoId' => $emprendimientoId === false ? '' : $emprendimientoId,
+    ]);
+  }
+
+  if ($emprendimientoId === false || $emprendimientoId < 1) {
+    return view($renderer, $response->withStatus(422), '/productos/update/update.php', [
+      'error' => 'Elegí un emprendimiento activo para el producto.',
+      'producto' => [...$product, 'id' => $id],
+      'categorias' => $categories,
+      'emprendimientos' => $emprendimientos,
     ]);
   }
 
   $savedImages = [];
   $currentImages = [];
   try {
-    $pdo = (new Database())->getConnection();
     $productStmt = $pdo->prepare(
       'SELECT id FROM productos WHERE id = :id AND usuario_id = :usuario_id'
     );
     $productStmt->execute(['id' => $id, 'usuario_id' => $user['id']]);
     if ($productStmt->fetchColumn() === false) {
       return $response->withHeader('Location', '/mis-productos')->withStatus(303);
+    }
+
+    $storeCheck = $pdo->prepare(
+      "SELECT id FROM emprendimientos WHERE id = :id AND usuario_id = :usuario_id AND estado = 'activo'"
+    );
+    $storeCheck->execute(['id' => $emprendimientoId, 'usuario_id' => $user['id']]);
+    if ($storeCheck->fetchColumn() === false) {
+      return view($renderer, $response->withStatus(422), '/productos/update/update.php', [
+        'error' => 'El emprendimiento seleccionado no está disponible.',
+        'producto' => [...$product, 'id' => $id],
+        'categorias' => $categories,
+        'emprendimientos' => $emprendimientos,
+      ]);
     }
 
     $currentImages = productImages($pdo, $id);
@@ -939,20 +2199,58 @@ $app->post('/productos/{id}/actualizar', function ($request, $response, array $a
         'error' => 'El producto debe conservar o tener al menos una imagen.',
         'producto' => [...$product, 'id' => $id, 'imagenes' => $currentImages],
         'categorias' => $categories,
+        'emprendimientos' => $emprendimientos,
       ]);
     }
 
     $savedImages = storeProductImages($imageFiles);
     $pdo->beginTransaction();
-    $stmt = $pdo->prepare(
-      "UPDATE productos SET nombre = :nombre, precio = :precio, descripcion = :descripcion, categoria = :categoria, condicion = :condicion, unidad = :unidad, cantidad_minima = :cantidad_minima, stock = :stock, estado = 'pendiente', motivo_revision = NULL WHERE id = :id AND usuario_id = :usuario_id"
+    $storeLock = $pdo->prepare(
+      "SELECT id FROM emprendimientos WHERE id = :id AND usuario_id = :usuario_id AND estado = 'activo' FOR UPDATE"
     );
-    $stmt->execute([...$product, 'id' => $id, 'usuario_id' => $user['id']]);
+    $storeLock->execute(['id' => $emprendimientoId, 'usuario_id' => $user['id']]);
+    if ($storeLock->fetchColumn() === false) {
+      $pdo->rollBack();
+      deleteProductImageFiles($savedImages);
+      return view($renderer, $response->withStatus(422), '/productos/update/update.php', [
+        'error' => 'El emprendimiento seleccionado dejó de estar disponible.',
+        'producto' => [...$product, 'id' => $id, 'imagenes' => $currentImages],
+        'categorias' => $categories,
+        'emprendimientos' => $emprendimientos,
+        'emprendimientoId' => $emprendimientoId,
+      ]);
+    }
+
+    $duplicate = $pdo->prepare(
+      'SELECT id FROM productos WHERE emprendimiento_id = :emprendimiento_id AND LOWER(nombre) = LOWER(:nombre) AND id <> :id'
+    );
+    $duplicate->execute([
+      'emprendimiento_id' => $emprendimientoId,
+      'nombre' => $product['nombre'],
+      'id' => $id,
+    ]);
+    if ($duplicate->fetchColumn() !== false) {
+      $pdo->rollBack();
+      deleteProductImageFiles($savedImages);
+      return view($renderer, $response->withStatus(409), '/productos/update/update.php', [
+        'error' => 'Ya tenés un producto con ese nombre en este emprendimiento.',
+        'producto' => [...$product, 'id' => $id, 'imagenes' => $currentImages],
+        'categorias' => $categories,
+        'emprendimientos' => $emprendimientos,
+        'emprendimientoId' => $emprendimientoId,
+      ]);
+    }
+
+    $stmt = $pdo->prepare(
+      "UPDATE productos SET nombre = :nombre, precio = :precio, descripcion = :descripcion, categoria = :categoria, condicion = :condicion, unidad = :unidad, cantidad_minima = :cantidad_minima, stock = :stock, emprendimiento_id = :emprendimiento_id, estado = 'pendiente', motivo_revision = NULL, oferta_estado = 'desactivada', oferta_motivo_revision = NULL WHERE id = :id AND usuario_id = :usuario_id"
+    );
+    $stmt->execute([...$product, 'id' => $id, 'usuario_id' => $user['id'], 'emprendimiento_id' => $emprendimientoId]);
     if ($removePaths !== [] || $savedImages !== []) {
       $pdo->prepare('DELETE FROM producto_imagenes WHERE producto_id = :producto_id')
         ->execute(['producto_id' => $id]);
       insertProductImages($pdo, $id, [...$keptImages, ...$savedImages]);
     }
+    recordAuditEvent($pdo, 'editar_producto', 'producto', $id, 'El vendedor actualizó el producto; quedó pendiente de revisión.', 'usuario:' . $user['id']);
     $pdo->commit();
     deleteProductImageFiles(array_map(
       static fn(string $path): array => ['ruta' => $path],
@@ -966,6 +2264,7 @@ $app->post('/productos/{id}/actualizar', function ($request, $response, array $a
       'error' => $exception->getMessage(),
       'producto' => [...$product, 'id' => $id, 'imagenes' => $currentImages],
       'categorias' => $categories,
+      'emprendimientos' => $emprendimientos,
     ]);
   } catch (PDOException $exception) {
     if (isset($pdo) && $pdo->inTransaction()) {
@@ -977,6 +2276,7 @@ $app->post('/productos/{id}/actualizar', function ($request, $response, array $a
       'error' => 'No se pudo actualizar el producto.',
       'producto' => [...$product, 'id' => $id, 'imagenes' => $currentImages],
       'categorias' => $categories,
+      'emprendimientos' => $emprendimientos,
     ]);
   } catch (RuntimeException $exception) {
     if (isset($pdo) && $pdo->inTransaction()) {
@@ -988,6 +2288,7 @@ $app->post('/productos/{id}/actualizar', function ($request, $response, array $a
       'error' => 'No se pudieron procesar las imágenes o actualizar el producto.',
       'producto' => [...$product, 'id' => $id, 'imagenes' => $currentImages],
       'categorias' => $categories,
+      'emprendimientos' => $emprendimientos,
     ]);
   }
 });
@@ -1010,6 +2311,7 @@ $app->post('/productos/{id}/eliminar', function ($request, $response, array $arg
   );
   $stmt->execute(['id' => $id, 'usuario_id' => $user['id']]);
   if ($stmt->rowCount() > 0) {
+    recordAuditEvent($pdo, 'eliminar_producto', 'producto', $id, 'El vendedor eliminó su publicación.', 'usuario:' . $user['id']);
     deleteProductImageFiles($images);
   }
   $_SESSION['flash'] = $stmt->rowCount() > 0
@@ -1040,7 +2342,7 @@ $app->post('/carrito/agregar', function ($request, $response) use ($requireCsrf,
 
   try {
     $pdo = (new Database())->getConnection();
-    $product = $pdo->prepare("SELECT id, usuario_id FROM productos WHERE id = :id AND estado = 'aprobado'");
+    $product = $pdo->prepare("SELECT p.id, p.usuario_id FROM productos p INNER JOIN emprendimientos e ON e.id = p.emprendimiento_id INNER JOIN usuarios u ON u.id = p.usuario_id WHERE p.id = :id AND p.estado = 'aprobado' AND e.estado = 'activo' AND u.estado = 'activo'");
     $product->execute(['id' => $productId]);
     $availableProduct = $product->fetch();
     if ($availableProduct === false) {
@@ -1053,7 +2355,7 @@ $app->post('/carrito/agregar', function ($request, $response) use ($requireCsrf,
     }
 
     $availability = $pdo->prepare(
-      'SELECT precio, cantidad_minima, stock FROM productos WHERE id = :id'
+      "SELECT p.precio, p.cantidad_minima, p.stock FROM productos p INNER JOIN emprendimientos e ON e.id = p.emprendimiento_id WHERE p.id = :id AND e.estado = 'activo'"
     );
     $availability->execute(['id' => $productId]);
     $productDetails = $availability->fetch();
@@ -1098,13 +2400,15 @@ $app->get('/carrito', function ($request, $response) use ($renderer, $loginUrl, 
 
   try {
     $stmt = (new Database())->getConnection()->prepare(
-      'SELECT c.id, c.cantidad, p.id AS producto_id, p.usuario_id AS vendedor_id, p.nombre, p.precio, p.descripcion, p.estado, p.stock, p.cantidad_minima, p.unidad FROM carrito_items c INNER JOIN productos p ON p.id = c.producto_id WHERE c.usuario_id = :usuario_id ORDER BY c.id DESC'
+      'SELECT c.id, c.cantidad, p.id AS producto_id, p.usuario_id AS vendedor_id, p.nombre, ' . currentProductPriceSql('p') . ' AS precio, p.precio AS precio_original, ' . productOfferActiveSql('p') . ' AS oferta_vigente, p.descripcion, p.estado, p.stock, p.cantidad_minima, p.unidad, e.estado AS emprendimiento_estado, u.estado AS vendedor_estado, (SELECT pi.ruta FROM producto_imagenes pi WHERE pi.producto_id = p.id ORDER BY pi.orden ASC LIMIT 1) AS imagen_url FROM carrito_items c INNER JOIN productos p ON p.id = c.producto_id LEFT JOIN emprendimientos e ON e.id = p.emprendimiento_id INNER JOIN usuarios u ON u.id = p.usuario_id WHERE c.usuario_id = :usuario_id ORDER BY c.id DESC'
     );
     $stmt->execute(['usuario_id' => $user['id']]);
     $items = $stmt->fetchAll();
     $hasUnavailableItems = count(array_filter(
       $items,
       static fn(array $item): bool => $item['estado'] !== 'aprobado'
+        || $item['emprendimiento_estado'] !== 'activo'
+        || $item['vendedor_estado'] !== 'activo'
         || (int) $item['vendedor_id'] === (int) $user['id']
         || $item['stock'] === null
         || (int) $item['stock'] < (int) $item['cantidad_minima']
@@ -1112,7 +2416,7 @@ $app->get('/carrito', function ($request, $response) use ($renderer, $loginUrl, 
         || (int) $item['cantidad'] > (int) $item['stock']
     )) > 0;
     $total = array_sum(array_map(
-      static fn(array $item): float => $item['estado'] === 'aprobado' && (int) $item['vendedor_id'] !== (int) $user['id'] && $item['stock'] !== null && (int) $item['cantidad'] <= (int) $item['stock']
+      static fn(array $item): float => $item['estado'] === 'aprobado' && $item['emprendimiento_estado'] === 'activo' && $item['vendedor_estado'] === 'activo' && (int) $item['vendedor_id'] !== (int) $user['id'] && $item['stock'] !== null && (int) $item['cantidad'] <= (int) $item['stock']
         ? (float) $item['precio'] * (int) $item['cantidad']
         : 0,
       $items
@@ -1200,7 +2504,7 @@ $app->get('/compras/checkout', function ($request, $response) use ($renderer, $l
     $profileStmt->execute(['id' => $user['id']]);
     $profile = $profileStmt->fetch();
     $itemsStmt = $pdo->prepare(
-      'SELECT c.cantidad, p.nombre, p.precio, p.stock, p.cantidad_minima, p.estado, p.usuario_id AS vendedor_id FROM carrito_items c INNER JOIN productos p ON p.id = c.producto_id WHERE c.usuario_id = :usuario_id'
+      'SELECT c.cantidad, p.nombre, ' . currentProductPriceSql('p') . ' AS precio, p.precio AS precio_original, ' . productOfferActiveSql('p') . ' AS oferta_vigente, p.oferta_fin, p.stock, p.cantidad_minima, p.estado, p.usuario_id AS vendedor_id, u.estado AS vendedor_estado FROM carrito_items c INNER JOIN productos p ON p.id = c.producto_id INNER JOIN usuarios u ON u.id = p.usuario_id WHERE c.usuario_id = :usuario_id'
     );
     $itemsStmt->execute(['usuario_id' => $user['id']]);
     $items = $itemsStmt->fetchAll();
@@ -1213,6 +2517,7 @@ $app->get('/compras/checkout', function ($request, $response) use ($renderer, $l
     $hasUnavailableItems = count(array_filter(
       $items,
       static fn(array $item): bool => $item['estado'] !== 'aprobado'
+        || $item['vendedor_estado'] !== 'activo'
         || (int) $item['vendedor_id'] === (int) $user['id']
         || $item['stock'] === null
         || (int) $item['cantidad'] > (int) $item['stock']
@@ -1270,7 +2575,7 @@ $app->post('/compras/confirmar', function ($request, $response) use ($requireCsr
   try {
     $pdo->beginTransaction();
     $stmt = $pdo->prepare(
-      "SELECT c.producto_id, c.cantidad, p.nombre, p.precio, p.usuario_id, p.estado, p.stock, p.cantidad_minima, p.unidad, COALESCE(u.nombre, 'Vendedor no disponible') AS vendedor_nombre FROM carrito_items c INNER JOIN productos p ON p.id = c.producto_id LEFT JOIN usuarios u ON u.id = p.usuario_id WHERE c.usuario_id = :usuario_id ORDER BY p.id FOR UPDATE"
+      "SELECT c.producto_id, c.cantidad, p.nombre, " . currentProductPriceSql('p') . " AS precio, p.precio AS precio_original, " . productOfferActiveSql('p') . " AS oferta_vigente, p.oferta_fin, p.usuario_id, p.emprendimiento_id, p.estado, p.stock, p.cantidad_minima, p.unidad, e.nombre AS emprendimiento_nombre, e.estado AS emprendimiento_estado, u.estado AS vendedor_estado, COALESCE(u.nombre, 'Vendedor no disponible') AS vendedor_nombre FROM carrito_items c INNER JOIN productos p ON p.id = c.producto_id INNER JOIN emprendimientos e ON e.id = p.emprendimiento_id INNER JOIN usuarios u ON u.id = p.usuario_id WHERE c.usuario_id = :usuario_id ORDER BY p.id FOR UPDATE"
     );
     $stmt->execute(['usuario_id' => $user['id']]);
     $items = $stmt->fetchAll();
@@ -1283,6 +2588,8 @@ $app->post('/compras/confirmar', function ($request, $response) use ($requireCsr
     if (array_filter(
       $items,
       static fn(array $item): bool => $item['estado'] !== 'aprobado'
+        || $item['emprendimiento_estado'] !== 'activo'
+        || $item['vendedor_estado'] !== 'activo'
         || $item['stock'] === null
         || (int) $item['cantidad'] < (int) $item['cantidad_minima']
         || (int) $item['cantidad'] > (int) $item['stock']
@@ -1301,10 +2608,10 @@ $app->post('/compras/confirmar', function ($request, $response) use ($requireCsr
       "INSERT INTO compras (usuario_id, estado, total, moneda, estado_pago, envio_proveedor, envio_estado, destino_nombre, destino_direccion, destino_localidad, destino_provincia, destino_codigo_postal, destino_telefono) VALUES (:usuario_id, 'pendiente_envio', :total, 'ARS', 'sin_pago', 'correo_argentino', 'cotizacion_pendiente', :destino_nombre, :destino_direccion, :destino_localidad, :destino_provincia, :destino_codigo_postal, :destino_telefono)"
     );
     $insertItem = $pdo->prepare(
-      'INSERT INTO compra_items (compra_id, producto_id, vendedor_id, nombre_producto, nombre_vendedor, precio_unitario, cantidad, producto_unidad) VALUES (:compra_id, :producto_id, :vendedor_id, :nombre_producto, :nombre_vendedor, :precio_unitario, :cantidad, :producto_unidad)'
+      'INSERT INTO compra_items (compra_id, producto_id, vendedor_id, emprendimiento_id, nombre_emprendimiento, nombre_producto, nombre_vendedor, precio_unitario, cantidad, producto_unidad) VALUES (:compra_id, :producto_id, :vendedor_id, :emprendimiento_id, :nombre_emprendimiento, :nombre_producto, :nombre_vendedor, :precio_unitario, :cantidad, :producto_unidad)'
     );
     $reserveStock = $pdo->prepare(
-      "UPDATE productos SET stock = stock - :cantidad WHERE id = :id AND estado = 'aprobado' AND stock >= :minimum_stock"
+      "UPDATE productos SET stock = stock - :cantidad WHERE id = :id AND estado = 'aprobado' AND stock >= :minimum_stock AND EXISTS (SELECT 1 FROM emprendimientos e WHERE e.id = productos.emprendimiento_id AND e.estado = 'activo')"
     );
     $notifySeller = $pdo->prepare(
       "INSERT INTO notificaciones (usuario_id, tipo, mensaje, enlace) VALUES (:usuario_id, 'pedido', :mensaje, '/ventas')"
@@ -1340,6 +2647,8 @@ $app->post('/compras/confirmar', function ($request, $response) use ($requireCsr
           'compra_id' => $orderId,
           'producto_id' => $item['producto_id'],
           'vendedor_id' => $sellerId,
+          'emprendimiento_id' => $item['emprendimiento_id'],
+          'nombre_emprendimiento' => $item['emprendimiento_nombre'],
           'nombre_producto' => $item['nombre'],
           'nombre_vendedor' => $item['vendedor_nombre'],
           'precio_unitario' => $item['precio'],
@@ -1376,7 +2685,7 @@ $app->get('/mis-compras', function ($request, $response) use ($renderer, $loginU
 
   try {
     $stmt = (new Database())->getConnection()->prepare(
-      'SELECT c.id AS compra_id, c.estado, c.total, c.creado_en, c.estado_pago, c.envio_estado, c.envio_costo, c.envio_tracking, c.mp_preference_id, i.id AS compra_item_id, i.producto_id, i.nombre_producto, i.nombre_vendedor, i.precio_unitario, i.cantidad, i.producto_unidad, r.id AS resena_id FROM compras c LEFT JOIN compra_items i ON i.compra_id = c.id LEFT JOIN producto_resenas r ON r.compra_item_id = i.id WHERE c.usuario_id = :usuario_id ORDER BY c.id DESC, i.id ASC'
+      'SELECT c.id AS compra_id, c.estado, c.total, c.creado_en, c.estado_pago, c.envio_estado, c.envio_costo, c.envio_tracking, c.mp_preference_id, i.id AS compra_item_id, i.producto_id, i.nombre_producto, i.nombre_vendedor, i.nombre_emprendimiento, i.precio_unitario, i.cantidad, i.producto_unidad, r.id AS resena_id FROM compras c LEFT JOIN compra_items i ON i.compra_id = c.id LEFT JOIN producto_resenas r ON r.compra_item_id = i.id WHERE c.usuario_id = :usuario_id ORDER BY c.id DESC, i.id ASC'
     );
     $stmt->execute(['usuario_id' => $user['id']]);
     $compras = [];
@@ -1510,7 +2819,7 @@ $app->get('/ventas', function ($request, $response) use ($renderer, $loginUrl, $
 
   try {
     $stmt = (new Database())->getConnection()->prepare(
-      'SELECT c.id, c.estado, c.total, c.creado_en, c.estado_pago, c.mp_preference_id, c.envio_estado, c.envio_costo, c.envio_tracking, c.destino_nombre, c.destino_direccion, c.destino_localidad, c.destino_provincia, c.destino_codigo_postal, c.destino_telefono, u.nombre AS comprador, GROUP_CONCAT(CONCAT(i.nombre_producto, \' × \', i.cantidad, \' \', i.producto_unidad) ORDER BY i.id SEPARATOR \', \') AS productos FROM compras c INNER JOIN compra_items i ON i.compra_id = c.id INNER JOIN usuarios u ON u.id = c.usuario_id WHERE i.vendedor_id = :vendedor_id GROUP BY c.id ORDER BY c.id DESC'
+      'SELECT c.id, c.estado, c.total, c.creado_en, c.estado_pago, c.mp_preference_id, c.envio_estado, c.envio_costo, c.envio_tracking, c.destino_nombre, c.destino_direccion, c.destino_localidad, c.destino_provincia, c.destino_codigo_postal, c.destino_telefono, u.nombre AS comprador, GROUP_CONCAT(CONCAT(i.nombre_emprendimiento, \' · \', i.nombre_producto, \' × \', i.cantidad, \' \', i.producto_unidad) ORDER BY i.id SEPARATOR \', \') AS productos FROM compras c INNER JOIN compra_items i ON i.compra_id = c.id INNER JOIN usuarios u ON u.id = c.usuario_id WHERE i.vendedor_id = :vendedor_id GROUP BY c.id ORDER BY c.id DESC'
     );
     $stmt->execute(['vendedor_id' => $user['id']]);
     return view($renderer, $response, '/ventas/index.php', [
@@ -1833,6 +3142,7 @@ $renderAdminPanel = static function ($response, bool $includeData = true, array 
   $productos = [];
   $usuarios = [];
   $reportes = [];
+  $reportesUsuarios = [];
   if ($includeData) {
     try {
       $pdo = (new Database())->getConnection();
@@ -1844,6 +3154,9 @@ $renderAdminPanel = static function ($response, bool $includeData = true, array 
       )->fetchAll();
       $reportes = $pdo->query(
         "SELECT r.id, r.producto_id, r.usuario_id, r.motivo, r.detalle, r.creado_en, p.nombre AS producto, p.estado AS estado_producto, u.nombre AS reportante FROM producto_reportes r INNER JOIN productos p ON p.id = r.producto_id LEFT JOIN usuarios u ON u.id = r.usuario_id WHERE r.estado = 'pendiente' ORDER BY r.creado_en ASC LIMIT 100"
+      )->fetchAll();
+      $reportesUsuarios = $pdo->query(
+        "SELECT r.id, r.usuario_reportado_id, r.usuario_reportante_id, r.motivo, r.detalle, r.creado_en, objetivo.nombre AS cuenta, objetivo.estado AS estado_cuenta, reportante.nombre AS reportante FROM usuario_reportes r INNER JOIN usuarios objetivo ON objetivo.id = r.usuario_reportado_id LEFT JOIN usuarios reportante ON reportante.id = r.usuario_reportante_id WHERE r.estado = 'pendiente' ORDER BY r.creado_en ASC LIMIT 100"
       )->fetchAll();
     } catch (PDOException $exception) {
       error_log($exception->getMessage());
@@ -1857,10 +3170,370 @@ $renderAdminPanel = static function ($response, bool $includeData = true, array 
     'productos' => $productos,
     'usuarios' => $usuarios,
     'reportes' => $reportes,
+    'reportesUsuarios' => $reportesUsuarios,
     'categorias' => productCategories(),
     ...$viewData,
   ]);
 };
+
+$app->get('/admin/conversaciones', function ($request, $response) use ($renderer, $requireAdmin, $renderError) {
+  if (($authorizationFailure = $requireAdmin($request, $response)) !== null) {
+    return $authorizationFailure;
+  }
+
+  try {
+    $stmt = (new Database())->getConnection()->query(
+      'SELECT c.id, c.creado_en, c.actualizado_en, b.nombre AS comprador, v.nombre AS vendedor, e.nombre AS emprendimiento, p.nombre AS producto, (SELECT COUNT(*) FROM mensajes m WHERE m.conversacion_id = c.id) AS cantidad_mensajes FROM conversaciones c INNER JOIN usuarios b ON b.id = c.comprador_id INNER JOIN usuarios v ON v.id = c.vendedor_id LEFT JOIN emprendimientos e ON e.id = c.emprendimiento_id LEFT JOIN productos p ON p.id = c.producto_id ORDER BY c.actualizado_en DESC, c.id DESC LIMIT 200'
+    );
+    return view($renderer, $response, '/admin/conversaciones.php', [
+      'adminPanel' => true,
+      'conversaciones' => $stmt->fetchAll(),
+    ]);
+  } catch (Throwable $exception) {
+    error_log($exception->getMessage());
+    return $renderError($response, 500, 'No se pudieron cargar las conversaciones para revisión.');
+  }
+});
+
+$app->post('/admin/conversaciones/{id}/acceso', function ($request, $response, array $args) use ($requireAdmin, $requireCsrf) {
+  if (($authorizationFailure = $requireAdmin($request, $response)) !== null) {
+    return $authorizationFailure;
+  }
+  if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
+    return $csrfFailure;
+  }
+
+  $id = filter_var($args['id'] ?? null, FILTER_VALIDATE_INT);
+  $motivo = trim((string) (($request->getParsedBody() ?? [])['motivo'] ?? ''));
+  if ($id === false || $id < 1 || mb_strlen($motivo) < 20 || mb_strlen($motivo) > 500) {
+    $_SESSION['flash'] = 'Ingresá un motivo de al menos 20 caracteres para solicitar acceso.';
+    return $response->withHeader('Location', '/admin/conversaciones')->withStatus(303);
+  }
+
+  try {
+    $pdo = (new Database())->getConnection();
+    $check = $pdo->prepare('SELECT id FROM conversaciones WHERE id = :id');
+    $check->execute(['id' => $id]);
+    if ($check->fetchColumn() === false) {
+      $_SESSION['flash'] = 'No encontramos esa conversación.';
+      return $response->withHeader('Location', '/admin/conversaciones')->withStatus(303);
+    }
+
+    $pdo->beginTransaction();
+    $audit = $pdo->prepare(
+      "INSERT INTO admin_conversacion_auditoria (conversacion_id, admin_actor, session_fingerprint, motivo) VALUES (:conversacion_id, 'admin_pin_compartido', :session_fingerprint, :motivo)"
+    );
+    $audit->execute([
+      'conversacion_id' => $id,
+      'session_fingerprint' => hash('sha256', session_id()),
+      'motivo' => $motivo,
+    ]);
+    recordAuditEvent($pdo, 'consulta_conversacion', 'conversacion', $id, $motivo);
+    $pdo->commit();
+    $_SESSION['admin_chat_access'][$id] = [
+      'expires_at' => time() + 300,
+      'motivo' => $motivo,
+    ];
+    return $response->withHeader('Location', '/admin/conversaciones/' . $id)->withStatus(303);
+  } catch (Throwable $exception) {
+    if (isset($pdo) && $pdo->inTransaction()) {
+      $pdo->rollBack();
+    }
+    error_log($exception->getMessage());
+    $_SESSION['flash'] = 'No se pudo registrar el acceso administrativo.';
+    return $response->withHeader('Location', '/admin/conversaciones')->withStatus(303);
+  }
+});
+
+$app->get('/admin/conversaciones/{id}', function ($request, $response, array $args) use ($renderer, $requireAdmin, $renderError) {
+  $response = $response->withHeader('Cache-Control', 'no-store')
+    ->withHeader('Referrer-Policy', 'no-referrer');
+  if (($authorizationFailure = $requireAdmin($request, $response)) !== null) {
+    return $authorizationFailure;
+  }
+  $id = filter_var($args['id'] ?? null, FILTER_VALIDATE_INT);
+  $grant = $id !== false ? ($_SESSION['admin_chat_access'][$id] ?? null) : null;
+  if (
+    $id === false
+    || $id < 1
+    || !is_array($grant)
+    || !isset($grant['expires_at'], $grant['motivo'])
+    || (int) $grant['expires_at'] < time()
+  ) {
+    if ($id !== false) {
+      unset($_SESSION['admin_chat_access'][$id]);
+    }
+    $_SESSION['flash'] = 'Para ver el contenido, registrá un motivo de acceso en la lista de conversaciones.';
+    return $response->withHeader('Location', '/admin/conversaciones')->withStatus(303);
+  }
+  unset($_SESSION['admin_chat_access'][$id]);
+
+  try {
+    $pdo = (new Database())->getConnection();
+    $stmt = $pdo->prepare(
+      'SELECT c.id, b.nombre AS comprador, v.nombre AS vendedor, e.nombre AS emprendimiento, p.nombre AS producto FROM conversaciones c INNER JOIN usuarios b ON b.id = c.comprador_id INNER JOIN usuarios v ON v.id = c.vendedor_id LEFT JOIN emprendimientos e ON e.id = c.emprendimiento_id LEFT JOIN productos p ON p.id = c.producto_id WHERE c.id = :id'
+    );
+    $stmt->execute(['id' => $id]);
+    $conversation = $stmt->fetch();
+    if ($conversation === false) {
+      return $renderError($response, 404, 'No encontramos esa conversación.');
+    }
+
+    $messages = $pdo->prepare(
+      'SELECT m.contenido, m.creado_en, u.nombre AS remitente FROM mensajes m INNER JOIN usuarios u ON u.id = m.remitente_id WHERE m.conversacion_id = :conversacion_id ORDER BY m.id DESC LIMIT 200'
+    );
+    $messages->execute(['conversacion_id' => $id]);
+    return view($renderer, $response, '/admin/conversacion.php', [
+      'adminPanel' => true,
+      'conversacion' => $conversation,
+      'mensajes' => array_reverse($messages->fetchAll()),
+      'motivoAcceso' => $grant['motivo'],
+    ]);
+  } catch (Throwable $exception) {
+    error_log($exception->getMessage());
+    return $renderError($response, 500, 'No se pudo cargar el contenido de la conversación.');
+  }
+});
+
+$app->get('/admin/compras', function ($request, $response) use ($renderer, $requireAdmin) {
+  if (($authorizationFailure = $requireAdmin($request, $response)) !== null) {
+    return $authorizationFailure;
+  }
+
+  return view($renderer, $response, '/admin/compras.php', [
+    'adminPanel' => true,
+  ]);
+});
+
+$app->get('/admin/ofertas', function ($request, $response) use ($renderer, $requireAdmin, $renderError) {
+  if (($authorizationFailure = $requireAdmin($request, $response)) !== null) {
+    return $authorizationFailure;
+  }
+
+  try {
+    $stmt = (new Database())->getConnection()->query(
+      "SELECT p.id, p.nombre, p.precio, p.oferta_precio, p.oferta_inicio, p.oferta_fin, p.oferta_motivo_revision, u.nombre AS vendedor, e.nombre AS emprendimiento FROM productos p INNER JOIN usuarios u ON u.id = p.usuario_id INNER JOIN emprendimientos e ON e.id = p.emprendimiento_id WHERE p.oferta_estado = 'pendiente' ORDER BY p.oferta_inicio ASC, p.id ASC LIMIT 100"
+    );
+    return view($renderer, $response, '/admin/ofertas.php', [
+      'adminPanel' => true,
+      'ofertas' => $stmt->fetchAll(),
+    ]);
+  } catch (Throwable $exception) {
+    error_log($exception->getMessage());
+    return $renderError($response, 500, 'No se pudieron cargar las ofertas pendientes.');
+  }
+});
+
+$app->post('/admin/ofertas/{id}/revisar', function ($request, $response, array $args) use ($requireAdmin, $requireCsrf) {
+  if (($authorizationFailure = $requireAdmin($request, $response)) !== null) {
+    return $authorizationFailure;
+  }
+  if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
+    return $csrfFailure;
+  }
+
+  $id = filter_var($args['id'] ?? null, FILTER_VALIDATE_INT);
+  $data = $request->getParsedBody() ?? [];
+  $action = (string) ($data['accion'] ?? '');
+  $reason = trim((string) ($data['motivo'] ?? ''));
+  if (
+    $id === false || $id < 1
+    || !in_array($action, ['aprobar', 'rechazar'], true)
+    || ($action === 'rechazar' && (mb_strlen($reason) < 10 || mb_strlen($reason) > 500))
+  ) {
+    $_SESSION['flash'] = 'La decisión no es válida; el rechazo requiere un motivo de entre 10 y 500 caracteres.';
+    return $response->withHeader('Location', '/admin/ofertas')->withStatus(303);
+  }
+
+  try {
+    $pdo = (new Database())->getConnection();
+    $pdo->beginTransaction();
+    $check = $pdo->prepare(
+      "SELECT p.precio, p.oferta_precio, p.oferta_inicio, p.oferta_fin, p.oferta_fin > UTC_TIMESTAMP() AS oferta_no_vencida, p.estado, e.estado AS emprendimiento_estado FROM productos p INNER JOIN emprendimientos e ON e.id = p.emprendimiento_id WHERE p.id = :id AND p.oferta_estado = 'pendiente' FOR UPDATE"
+    );
+    $check->execute(['id' => $id]);
+    $offer = $check->fetch();
+    if ($offer === false) {
+      $pdo->rollBack();
+      $_SESSION['flash'] = 'La oferta ya no está pendiente o no existe.';
+      return $response->withHeader('Location', '/admin/ofertas')->withStatus(303);
+    }
+
+    if (
+      $action === 'aprobar'
+      && (
+        (float) $offer['oferta_precio'] <= 0
+        || (float) $offer['oferta_precio'] >= (float) $offer['precio']
+        || !(bool) $offer['oferta_no_vencida']
+        || $offer['estado'] !== 'aprobado'
+        || $offer['emprendimiento_estado'] !== 'activo'
+      )
+    ) {
+      $pdo->rollBack();
+      $_SESSION['flash'] = 'No se puede aprobar una oferta vencida, no vigente o asociada a un producto no disponible.';
+      return $response->withHeader('Location', '/admin/ofertas')->withStatus(303);
+    }
+
+    $state = $action === 'aprobar' ? 'aprobada' : 'rechazada';
+    $detail = $action === 'aprobar' ? 'Oferta aprobada.' : 'Motivo de rechazo: ' . $reason;
+    $pdo->prepare(
+      'UPDATE productos SET oferta_estado = :estado, oferta_motivo_revision = :motivo WHERE id = :id'
+    )->execute([
+      'estado' => $state,
+      'motivo' => $action === 'aprobar' ? null : $reason,
+      'id' => $id,
+    ]);
+    recordAuditEvent(
+      $pdo,
+      $action === 'aprobar' ? 'aprobar_oferta' : 'rechazar_oferta',
+      'producto',
+      $id,
+      $detail
+    );
+    $pdo->commit();
+    $_SESSION['flash'] = $action === 'aprobar' ? 'La oferta quedó aprobada.' : 'La oferta fue rechazada y se informó el motivo.';
+  } catch (Throwable $exception) {
+    if (isset($pdo) && $pdo->inTransaction()) {
+      $pdo->rollBack();
+    }
+    error_log($exception->getMessage());
+    $_SESSION['flash'] = 'No se pudo registrar la decisión sobre la oferta.';
+  }
+  return $response->withHeader('Location', '/admin/ofertas')->withStatus(303);
+});
+
+$app->get('/admin/auditoria', function ($request, $response) use ($renderer, $requireAdmin, $renderError) {
+  if (($authorizationFailure = $requireAdmin($request, $response)) !== null) {
+    return $authorizationFailure;
+  }
+
+  $query = $request->getQueryParams();
+  $filters = [
+    'desde' => trim((string) ($query['desde'] ?? '')),
+    'hasta' => trim((string) ($query['hasta'] ?? '')),
+    'actor' => trim((string) ($query['actor'] ?? '')),
+    'entidad' => trim((string) ($query['entidad'] ?? '')),
+    'accion' => trim((string) ($query['accion'] ?? '')),
+  ];
+  $isDate = static function (string $value): bool {
+    if ($value === '') {
+      return true;
+    }
+    $date = DateTimeImmutable::createFromFormat('!Y-m-d', $value);
+    $errors = DateTimeImmutable::getLastErrors();
+    return $date !== false
+      && ($errors === false || ($errors['warning_count'] === 0 && $errors['error_count'] === 0))
+      && $date->format('Y-m-d') === $value;
+  };
+  if (
+    !$isDate($filters['desde'])
+    || !$isDate($filters['hasta'])
+    || ($filters['desde'] !== '' && $filters['hasta'] !== '' && $filters['desde'] > $filters['hasta'])
+    || mb_strlen($filters['actor']) > 100
+    || mb_strlen($filters['entidad']) > 40
+    || mb_strlen($filters['accion']) > 40
+  ) {
+    return view($renderer, $response->withStatus(422), '/admin/auditoria.php', [
+      'adminPanel' => true,
+      'filters' => $filters,
+      'error' => 'Revisá los filtros: las fechas deben ser válidas y el rango no puede invertirse.',
+      'entries' => [],
+    ]);
+  }
+
+  try {
+    $conditions = [];
+    $parameters = [];
+    if ($filters['desde'] !== '') {
+      $conditions[] = 'creado_en >= :desde';
+      $parameters['desde'] = $filters['desde'] . ' 00:00:00';
+    }
+    if ($filters['hasta'] !== '') {
+      $conditions[] = 'creado_en < DATE_ADD(:hasta, INTERVAL 1 DAY)';
+      $parameters['hasta'] = $filters['hasta'] . ' 00:00:00';
+    }
+    foreach (['actor', 'entidad', 'accion'] as $field) {
+      if ($filters[$field] !== '') {
+        $conditions[] = $field . ' = :' . $field;
+        $parameters[$field] = $filters[$field];
+      }
+    }
+    $where = $conditions === [] ? '' : ' WHERE ' . implode(' AND ', $conditions);
+    $stmt = (new Database())->getConnection()->prepare(
+      'SELECT id, actor, accion, entidad, entidad_id, detalle, creado_en FROM admin_auditoria'
+      . $where . ' ORDER BY id DESC LIMIT 200'
+    );
+    $stmt->execute($parameters);
+    return view($renderer, $response, '/admin/auditoria.php', [
+      'adminPanel' => true,
+      'filters' => $filters,
+      'entries' => $stmt->fetchAll(),
+    ]);
+  } catch (Throwable $exception) {
+    error_log($exception->getMessage());
+    return $renderError($response, 500, 'No se pudo consultar la auditoría.');
+  }
+});
+
+$app->post('/admin/compras/consultar', function ($request, $response) use ($renderer, $requireAdmin, $requireCsrf) {
+  if (($authorizationFailure = $requireAdmin($request, $response)) !== null) {
+    return $authorizationFailure;
+  }
+  if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
+    return $csrfFailure;
+  }
+
+  $data = $request->getParsedBody() ?? [];
+  $purchaseId = filter_var($data['compra_id'] ?? null, FILTER_VALIDATE_INT);
+  $reason = trim((string) ($data['motivo'] ?? ''));
+  if ($purchaseId === false || $purchaseId < 1 || mb_strlen($reason) < 20 || mb_strlen($reason) > 500) {
+    return view($renderer, $response->withStatus(422), '/admin/compras.php', [
+      'adminPanel' => true,
+      'compraId' => $purchaseId === false ? '' : $purchaseId,
+      'motivo' => $reason,
+      'error' => 'Ingresá un número de compra válido y un motivo de al menos 20 caracteres.',
+    ]);
+  }
+
+  try {
+    $pdo = (new Database())->getConnection();
+    recordAuditEvent($pdo, 'consulta_historial', 'compra', $purchaseId, $reason);
+
+    $purchaseQuery = $pdo->prepare(
+      'SELECT c.id, c.estado, c.estado_pago, c.total, c.moneda, c.creado_en, c.envio_estado, c.envio_costo, c.envio_tracking, u.nombre AS comprador FROM compras c INNER JOIN usuarios u ON u.id = c.usuario_id WHERE c.id = :id'
+    );
+    $purchaseQuery->execute(['id' => $purchaseId]);
+    $purchase = $purchaseQuery->fetch();
+    if ($purchase === false) {
+      return view($renderer, $response->withStatus(404), '/admin/compras.php', [
+        'adminPanel' => true,
+        'compraId' => $purchaseId,
+        'motivo' => $reason,
+        'error' => 'No encontramos una compra con ese número. La consulta quedó registrada.',
+      ]);
+    }
+
+    $items = $pdo->prepare(
+      'SELECT nombre_producto, nombre_emprendimiento, nombre_vendedor, precio_unitario, cantidad, producto_unidad FROM compra_items WHERE compra_id = :compra_id ORDER BY id ASC'
+    );
+    $items->execute(['compra_id' => $purchaseId]);
+    return view($renderer, $response, '/admin/compras.php', [
+      'adminPanel' => true,
+      'compraId' => $purchaseId,
+      'motivo' => $reason,
+      'compra' => $purchase,
+      'items' => $items->fetchAll(),
+    ]);
+  } catch (Throwable $exception) {
+    error_log($exception->getMessage());
+    return view($renderer, $response->withStatus(500), '/admin/compras.php', [
+      'adminPanel' => true,
+      'compraId' => $purchaseId,
+      'motivo' => $reason,
+      'error' => 'No se pudo consultar el historial de la compra.',
+    ]);
+  }
+});
 
 $app->get('/admin', function ($request, $response) use ($renderAdminPanel) {
   return $renderAdminPanel($response, ($_SESSION['admin_authenticated'] ?? false) === true);
@@ -1893,6 +3566,7 @@ $app->post('/admin/logout', function ($request, $response) use ($requireCsrf) {
   }
 
   unset($_SESSION['admin_authenticated']);
+  unset($_SESSION['admin_chat_access']);
   return $response->withHeader('Location', '/admin')->withStatus(303);
 });
 
@@ -1931,6 +3605,7 @@ $moderateProduct = static function ($request, $response, array $args, string $st
       }
     }
 
+    $pdo->beginTransaction();
     $stmt = $pdo->prepare(
       'UPDATE productos SET estado = :estado, motivo_revision = :motivo WHERE id = :id AND estado = \'pendiente\''
     );
@@ -1939,19 +3614,23 @@ $moderateProduct = static function ($request, $response, array $args, string $st
       'motivo' => $reason,
       'id' => $id,
     ]);
-    $audit = $pdo->prepare(
-      'INSERT INTO admin_auditoria (accion, entidad, entidad_id, detalle) VALUES (:accion, :entidad, :entidad_id, :detalle)'
-    );
-    $audit->execute([
-      'accion' => $state === 'aprobado' ? 'aprobar' : 'rechazar',
-      'entidad' => 'producto',
-      'entidad_id' => $id,
-      'detalle' => $state === 'aprobado' ? 'Publicación aprobada.' : mb_substr((string) $reason, 0, 500),
-    ]);
+    if ($stmt->rowCount() > 0) {
+      recordAuditEvent(
+        $pdo,
+        $state === 'aprobado' ? 'aprobar' : 'rechazar',
+        'producto',
+        $id,
+        $state === 'aprobado' ? 'Publicación aprobada.' : (string) $reason
+      );
+    }
+    $pdo->commit();
     $_SESSION['flash'] = $stmt->rowCount() > 0
       ? ($state === 'aprobado' ? 'La publicación se aprobó y ya aparece en el catálogo.' : 'La publicación se rechazó y se informó el motivo al vendedor.')
       : 'La publicación ya no está pendiente de revisión.';
-  } catch (PDOException $exception) {
+  } catch (Throwable $exception) {
+    if (isset($pdo) && $pdo instanceof PDO && $pdo->inTransaction()) {
+      $pdo->rollBack();
+    }
     error_log($exception->getMessage());
     $_SESSION['flash'] = 'No se pudo actualizar la publicación.';
   }
@@ -1972,44 +3651,62 @@ $app->post('/admin/reportes/{id}/accion', function ($request, $response, array $
   }
 
   $id = filter_var($args['id'] ?? null, FILTER_VALIDATE_INT);
-  $action = (string) (($request->getParsedBody() ?? [])['accion'] ?? '');
-  if ($id === false || $id < 1 || !in_array($action, ['descartar', 'retirar'], true)) {
+  $data = $request->getParsedBody() ?? [];
+  $action = (string) ($data['accion'] ?? '');
+  $reason = trim((string) ($data['motivo'] ?? ''));
+  if (
+    $id === false || $id < 1
+    || !in_array($action, ['descartar', 'retirar'], true)
+    || ($action === 'retirar' && (mb_strlen($reason) < 10 || mb_strlen($reason) > 500))
+  ) {
     $_SESSION['flash'] = 'La acción solicitada no es válida.';
     return $response->withHeader('Location', '/admin#reportes')->withStatus(303);
   }
 
+  $pdo = null;
   try {
     $pdo = (new Database())->getConnection();
-    $report = $pdo->prepare("SELECT id, producto_id FROM producto_reportes WHERE id = :id AND estado = 'pendiente'");
+    $pdo->beginTransaction();
+    $report = $pdo->prepare("SELECT id, producto_id FROM producto_reportes WHERE id = :id AND estado = 'pendiente' FOR UPDATE");
     $report->execute(['id' => $id]);
     $entry = $report->fetch();
     if ($entry === false) {
+      $pdo->rollBack();
       $_SESSION['flash'] = 'El reporte ya fue revisado o no existe.';
       return $response->withHeader('Location', '/admin#reportes')->withStatus(303);
     }
 
-    $pdo->beginTransaction();
+    if ($action === 'retirar') {
+      $product = $pdo->prepare('SELECT estado FROM productos WHERE id = :id FOR UPDATE');
+      $product->execute(['id' => (int) $entry['producto_id']]);
+      if ($product->fetchColumn() !== 'aprobado') {
+        $pdo->rollBack();
+        $_SESSION['flash'] = 'La publicación ya no está aprobada; no se aplicó el retiro.';
+        return $response->withHeader('Location', '/admin#reportes')->withStatus(303);
+      }
+    }
+
     $pdo->prepare("UPDATE producto_reportes SET estado = 'resuelto' WHERE id = :id")->execute(['id' => $id]);
     if ($action === 'retirar') {
       $pdo->prepare(
-        "UPDATE productos SET estado = 'rechazado', motivo_revision = 'Retirada por moderación tras un reporte.' WHERE id = :id AND estado = 'aprobado'"
-      )->execute(['id' => (int) $entry['producto_id']]);
+        "UPDATE productos SET estado = 'rechazado', motivo_revision = :motivo WHERE id = :id AND estado = 'aprobado'"
+      )->execute(['id' => (int) $entry['producto_id'], 'motivo' => $reason]);
     }
-    $audit = $pdo->prepare(
-      'INSERT INTO admin_auditoria (accion, entidad, entidad_id, detalle) VALUES (:accion, :entidad, :entidad_id, :detalle)'
+    recordAuditEvent(
+      $pdo,
+      $action === 'retirar' ? 'retirar_por_reporte' : 'descartar_reporte',
+      'producto_reporte',
+      $id,
+      $action === 'retirar'
+        ? 'Se retiró la publicación #' . (int) $entry['producto_id'] . '. Motivo: ' . $reason
+        : 'Reporte revisado; no se retiró la publicación.'
     );
-    $audit->execute([
-      'accion' => $action === 'retirar' ? 'retirar_por_reporte' : 'descartar_reporte',
-      'entidad' => 'producto_reporte',
-      'entidad_id' => $id,
-      'detalle' => $action === 'retirar' ? 'Se retiró la publicación reportada.' : 'Reporte revisado; no se retiró la publicación.',
-    ]);
     $pdo->commit();
     $_SESSION['flash'] = $action === 'retirar'
       ? 'El reporte se resolvió y la publicación dejó de estar visible.'
       : 'El reporte se revisó y se descartó.';
-  } catch (PDOException $exception) {
-    if (isset($pdo) && $pdo->inTransaction()) {
+  } catch (Throwable $exception) {
+    if ($pdo instanceof PDO && $pdo->inTransaction()) {
       $pdo->rollBack();
     }
     error_log($exception->getMessage());
@@ -2018,6 +3715,78 @@ $app->post('/admin/reportes/{id}/accion', function ($request, $response, array $
 
   return $response->withHeader('Location', '/admin#reportes')->withStatus(303);
 });
+
+$app->post('/admin/reportes-usuarios/{id}/accion', function ($request, $response, array $args) use ($requireAdmin, $requireCsrf) {
+  if (($authorizationFailure = $requireAdmin($request, $response)) !== null) {
+    return $authorizationFailure;
+  }
+  if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
+    return $csrfFailure;
+  }
+
+  $id = filter_var($args['id'] ?? null, FILTER_VALIDATE_INT);
+  $data = $request->getParsedBody() ?? [];
+  $action = (string) ($data['accion'] ?? '');
+  $reason = trim((string) ($data['motivo'] ?? ''));
+  if (
+    $id === false || $id < 1
+    || !in_array($action, ['descartar', 'bloquear'], true)
+    || ($action === 'bloquear' && (mb_strlen($reason) < 10 || mb_strlen($reason) > 500))
+  ) {
+    $_SESSION['flash'] = 'La acción no es válida; bloquear una cuenta requiere un motivo de entre 10 y 500 caracteres.';
+    return $response->withHeader('Location', '/admin#reportes-cuentas')->withStatus(303);
+  }
+
+  $pdo = null;
+  try {
+    $pdo = (new Database())->getConnection();
+    $pdo->beginTransaction();
+    $report = $pdo->prepare(
+      "SELECT r.usuario_reportado_id, u.estado FROM usuario_reportes r INNER JOIN usuarios u ON u.id = r.usuario_reportado_id WHERE r.id = :id AND r.estado = 'pendiente' FOR UPDATE"
+    );
+    $report->execute(['id' => $id]);
+    $entry = $report->fetch();
+    if ($entry === false) {
+      $pdo->rollBack();
+      $_SESSION['flash'] = 'El reporte ya fue revisado o no existe.';
+      return $response->withHeader('Location', '/admin#reportes-cuentas')->withStatus(303);
+    }
+
+    $accountId = (int) $entry['usuario_reportado_id'];
+    $accountBlocked = false;
+    if ($action === 'bloquear' && $entry['estado'] === 'activo') {
+      $blockAccount = $pdo->prepare("UPDATE usuarios SET estado = 'bloqueado' WHERE id = :id AND estado = 'activo'");
+      $blockAccount->execute(['id' => $accountId]);
+      $accountBlocked = $blockAccount->rowCount() > 0;
+    }
+    $pdo->prepare("UPDATE usuario_reportes SET estado = 'resuelto' WHERE id = :id AND estado = 'pendiente'")
+      ->execute(['id' => $id]);
+    recordAuditEvent(
+      $pdo,
+      $accountBlocked ? 'bloquear_por_reporte' : ($action === 'bloquear' ? 'revisar_reporte_cuenta' : 'descartar_reporte'),
+      'usuario_reporte',
+      $id,
+      $accountBlocked
+        ? 'Cuenta #' . $accountId . ' bloqueada por reporte. Motivo: ' . $reason
+        : ($action === 'bloquear'
+          ? 'Reporte resuelto; la cuenta ya no estaba activa y no se aplicó un nuevo bloqueo.'
+        : 'Reporte de cuenta revisado; no se aplicó una medida.'
+        )
+    );
+    $pdo->commit();
+    $_SESSION['flash'] = $accountBlocked
+      ? 'La cuenta quedó bloqueada y el reporte se resolvió.'
+      : 'El reporte se revisó sin aplicar una medida nueva.';
+  } catch (Throwable $exception) {
+    if ($pdo instanceof PDO && $pdo->inTransaction()) {
+      $pdo->rollBack();
+    }
+    error_log($exception->getMessage());
+    $_SESSION['flash'] = 'No se pudo procesar el reporte de cuenta.';
+  }
+  return $response->withHeader('Location', '/admin#reportes-cuentas')->withStatus(303);
+});
+
 $app->post('/admin/productos/{id}/rechazar', static function ($request, $response, array $args) use ($moderateProduct) {
   $data = $request->getParsedBody() ?? [];
   return $moderateProduct($request, $response, $args, 'rechazado', trim((string) ($data['motivo'] ?? '')));
@@ -2061,14 +3830,22 @@ $app->post('/admin/usuarios/{id}/editar', function ($request, $response, array $
       return $response->withHeader('Location', '/admin#usuarios')->withStatus(303);
     }
 
+    $pdo->beginTransaction();
     $update = $pdo->prepare(
       "UPDATE usuarios SET nombre = :nombre, gmail = :gmail, telefono = :telefono, direccion = :direccion WHERE id = :id AND estado <> 'eliminado'"
     );
     $update->execute([...$user, 'id' => $id]);
+    if ($update->rowCount() > 0) {
+      recordAuditEvent($pdo, 'editar_usuario', 'usuario', $id, 'Se actualizaron datos de la cuenta.');
+    }
+    $pdo->commit();
     $_SESSION['flash'] = $update->rowCount() > 0
       ? 'Los datos del usuario se actualizaron.'
       : 'No se encontró una cuenta activa para editar.';
-  } catch (PDOException $exception) {
+  } catch (Throwable $exception) {
+    if (isset($pdo) && $pdo instanceof PDO && $pdo->inTransaction()) {
+      $pdo->rollBack();
+    }
     error_log($exception->getMessage());
     $_SESSION['flash'] = 'No se pudieron actualizar los datos del usuario.';
   }
@@ -2087,20 +3864,54 @@ $app->post('/admin/usuarios/{id}/estado', function ($request, $response, array $
   $id = filter_var($args['id'] ?? null, FILTER_VALIDATE_INT);
   $data = $request->getParsedBody() ?? [];
   $state = (string) ($data['estado'] ?? '');
-  if ($id === false || $id < 1 || !in_array($state, ['activo', 'bloqueado'], true)) {
+  $reason = trim((string) ($data['motivo'] ?? ''));
+  if (
+    $id === false || $id < 1
+    || !in_array($state, ['activo', 'bloqueado'], true)
+    || mb_strlen($reason) < 10
+    || mb_strlen($reason) > 500
+  ) {
     $_SESSION['flash'] = 'La acción solicitada no es válida.';
     return $response->withHeader('Location', '/admin#usuarios')->withStatus(303);
   }
 
+  $pdo = null;
   try {
-    $update = (new Database())->getConnection()->prepare(
-      "UPDATE usuarios SET estado = :estado WHERE id = :id AND estado <> 'eliminado'"
-    );
+    $pdo = (new Database())->getConnection();
+    $pdo->beginTransaction();
+    $account = $pdo->prepare('SELECT estado FROM usuarios WHERE id = :id FOR UPDATE');
+    $account->execute(['id' => $id]);
+    $currentState = $account->fetchColumn();
+    if ($currentState === false || $currentState === 'eliminado') {
+      $pdo->rollBack();
+      $_SESSION['flash'] = 'No se encontró una cuenta disponible para cambiar.';
+      return $response->withHeader('Location', '/admin#usuarios')->withStatus(303);
+    }
+    if ($currentState === $state) {
+      $pdo->commit();
+      $_SESSION['flash'] = 'La cuenta ya tenía ese estado.';
+      return $response->withHeader('Location', '/admin#usuarios')->withStatus(303);
+    }
+
+    $update = $pdo->prepare('UPDATE usuarios SET estado = :estado WHERE id = :id');
     $update->execute(['estado' => $state, 'id' => $id]);
+    if ($update->rowCount() > 0) {
+      recordAuditEvent(
+        $pdo,
+        $state === 'bloqueado' ? 'bloquear_usuario' : 'reactivar_usuario',
+        'usuario',
+        $id,
+        ($state === 'bloqueado' ? 'Cuenta bloqueada. Motivo: ' : 'Cuenta reactivada. Motivo: ') . $reason
+      );
+    }
+    $pdo->commit();
     $_SESSION['flash'] = $update->rowCount() > 0
       ? ($state === 'bloqueado' ? 'La cuenta quedó bloqueada.' : 'La cuenta volvió a estar activa.')
       : 'No se encontró una cuenta disponible para cambiar.';
-  } catch (PDOException $exception) {
+  } catch (Throwable $exception) {
+    if ($pdo instanceof PDO && $pdo->inTransaction()) {
+      $pdo->rollBack();
+    }
     error_log($exception->getMessage());
     $_SESSION['flash'] = 'No se pudo cambiar el estado de la cuenta.';
   }
@@ -2117,13 +3928,25 @@ $app->post('/admin/usuarios/{id}/eliminar', function ($request, $response, array
   }
 
   $id = filter_var($args['id'] ?? null, FILTER_VALIDATE_INT);
-  if ($id === false || $id < 1) {
-    $_SESSION['flash'] = 'La cuenta seleccionada no es válida.';
+  $reason = trim((string) (($request->getParsedBody() ?? [])['motivo'] ?? ''));
+  if ($id === false || $id < 1 || mb_strlen($reason) < 10 || mb_strlen($reason) > 500) {
+    $_SESSION['flash'] = 'La cuenta o el motivo de eliminación no son válidos.';
     return $response->withHeader('Location', '/admin#usuarios')->withStatus(303);
   }
 
+  $pdo = null;
   try {
     $pdo = (new Database())->getConnection();
+    $pdo->beginTransaction();
+    $account = $pdo->prepare('SELECT estado FROM usuarios WHERE id = :id FOR UPDATE');
+    $account->execute(['id' => $id]);
+    $accountState = $account->fetchColumn();
+    if ($accountState === false || $accountState === 'eliminado') {
+      $pdo->rollBack();
+      $_SESSION['flash'] = 'La cuenta ya estaba eliminada o no existe.';
+      return $response->withHeader('Location', '/admin#usuarios')->withStatus(303);
+    }
+
     $productQuery = $pdo->prepare('SELECT id FROM productos WHERE usuario_id = :usuario_id');
     $productQuery->execute(['usuario_id' => $id]);
     $productIds = array_map('intval', $productQuery->fetchAll(PDO::FETCH_COLUMN));
@@ -2135,7 +3958,6 @@ $app->post('/admin/usuarios/{id}/eliminar', function ($request, $response, array
       $images = $imageQuery->fetchAll();
     }
 
-    $pdo->beginTransaction();
     if ($productIds !== []) {
       $placeholders = implode(',', array_fill(0, count($productIds), '?'));
       $removeProducts = $pdo->prepare("DELETE FROM productos WHERE id IN ($placeholders)");
@@ -2144,21 +3966,24 @@ $app->post('/admin/usuarios/{id}/eliminar', function ($request, $response, array
 
     $removeCart = $pdo->prepare('DELETE FROM carrito_items WHERE usuario_id = :id');
     $removeCart->execute(['id' => $id]);
+    $pdo->prepare("UPDATE emprendimientos SET estado = 'inactivo' WHERE usuario_id = :id")
+      ->execute(['id' => $id]);
     $removeAccount = $pdo->prepare(
-      "UPDATE usuarios SET nombre = 'Cuenta eliminada', gmail = :gmail, telefono = '', direccion = '', password_hash = NULL, estado = 'eliminado' WHERE id = :id AND estado <> 'eliminado'"
+      "UPDATE usuarios SET nombre = 'Cuenta eliminada', gmail = :gmail, telefono = '', direccion = '', localidad = NULL, provincia = NULL, codigo_postal = NULL, descripcion_vendedor = NULL, password_hash = NULL, estado = 'eliminado' WHERE id = :id AND estado <> 'eliminado'"
     );
     $removeAccount->execute([
       'gmail' => 'eliminado-' . $id . '@cuentas.invalid',
       'id' => $id,
     ]);
+    recordAuditEvent($pdo, 'eliminar_usuario', 'usuario', $id, 'Cuenta anonimizada; productos retirados y pedidos históricos conservados. Motivo: ' . $reason);
     $pdo->commit();
 
     deleteProductImageFiles($images);
     $_SESSION['flash'] = $removeAccount->rowCount() > 0
       ? 'La cuenta y sus productos se eliminaron; el historial de pedidos se conservó.'
       : 'La cuenta ya estaba eliminada o no existe.';
-  } catch (PDOException $exception) {
-    if (isset($pdo) && $pdo->inTransaction()) {
+  } catch (Throwable $exception) {
+    if ($pdo instanceof PDO && $pdo->inTransaction()) {
       $pdo->rollBack();
     }
     error_log($exception->getMessage());
