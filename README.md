@@ -46,8 +46,13 @@ Proyecto institucional **E.E.S.T Nº4 de Berazategui**.
    Abrí `http://localhost:8000`. El servidor queda activo hasta que lo detengas
    con `Ctrl+C`.
 
-Las cuentas se registran con el rol fijo `usuario` y una contraseña. Cada
-usuario puede administrar sus propias publicaciones; el catálogo muestra
+Al registrarse, cada persona elige entre el rol `visitante` y `emprendedor`.
+Los visitantes pueden comprar y recorrer el catálogo; desde “Mi puesto” pueden
+activar su perfil emprendedor sin crear otra cuenta. Los emprendedores cuentan
+con un espacio para administrar sus puestos, productos, ventas y mensajes. La
+migración 021 asigna el rol emprendedor a las cuentas anteriores que ya tenían
+productos y convierte las demás en visitantes. Cada emprendedor puede
+administrar sus propias publicaciones; el catálogo muestra
 únicamente productos aprobados. Las publicaciones nuevas y las que se editan
 quedan pendientes hasta que un administrador las revise en `/admin`.
 Las contraseñas nuevas deben tener entre 8 y 72 bytes.

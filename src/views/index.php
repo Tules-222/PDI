@@ -27,7 +27,9 @@ $currentQuery = array_filter($currentQuery, static fn(string $value): bool => $v
 ?>
 <section class="hero">
   <div class="hero-content">
-    <h1>Emprendi conecta emprendedores</h1>
+    <p class="eyebrow">La feria de los emprendimientos</p>
+    <h1>Recorré la feria. Encontrá algo único.</h1>
+    <p>Descubrí productos de emprendimientos cercanos y conectá directamente con quienes los hacen.</p>
     <form class="search-form" action="/" method="get" role="search">
       <label class="visually-hidden" for="product-search">Buscar productos</label>
       <input id="product-search" type="search" name="q" list="product-tags" value="<?= html($search) ?>" placeholder="¿Qué producto estás buscando?">
@@ -38,6 +40,7 @@ $currentQuery = array_filter($currentQuery, static fn(string $value): bool => $v
       </datalist>
       <button class="button button-primary" type="submit">Buscar</button>
     </form>
+    <a class="hero-seller-link" href="/mi-puesto">¿Tenés un emprendimiento? Armá tu puesto en Emprendi <span aria-hidden="true">→</span></a>
   </div>
 </section>
 

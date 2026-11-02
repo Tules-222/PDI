@@ -16,6 +16,7 @@ function currentUser(): ?array
     'id' => (int) $user['id'],
     'nombre' => (string) $user['nombre'],
     'gmail' => (string) $user['gmail'],
+    'rol' => (string) ($user['rol'] ?? 'visitante'),
   ];
 }
 
@@ -45,6 +46,7 @@ function setAuthenticatedUser(array $user): void
     'id' => (int) $user['id'],
     'nombre' => (string) $user['nombre'],
     'gmail' => (string) $user['gmail'],
+    'rol' => (string) ($user['rol'] ?? 'visitante'),
   ];
 }
 

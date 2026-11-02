@@ -57,7 +57,7 @@ $app->add(static function ($request, $handler) use ($app) {
   if (is_array($user) && isset($user['id'])) {
     try {
       $stmt = (new Database())->getConnection()->prepare(
-        'SELECT nombre, gmail, estado FROM usuarios WHERE id = :id'
+        'SELECT nombre, gmail, estado, rol FROM usuarios WHERE id = :id'
       );
       $stmt->execute(['id' => (int) $user['id']]);
       $account = $stmt->fetch();
@@ -68,6 +68,7 @@ $app->add(static function ($request, $handler) use ($app) {
       } else {
         $_SESSION['usuario']['nombre'] = (string) $account['nombre'];
         $_SESSION['usuario']['gmail'] = (string) $account['gmail'];
+        $_SESSION['usuario']['rol'] = (string) $account['rol'];
       }
     } catch (Throwable $exception) {
       error_log($exception->getMessage());
@@ -116,10 +117,110 @@ function recordAuditEvent(
 }
 
 $loginUrl = static fn(string $path): string => '/usuarios/login?return_to=' . rawurlencode($path);
+$requireEntrepreneur = static function ($request, $response) use ($loginUrl) {
+  $user = currentUser();
+  if ($user === null) {
+    return $response->withHeader('Location', $loginUrl('/mi-puesto'))->withStatus(303);
+  }
 
-$app->post('/productos/{id}/oferta', function ($request, $response, array $args) use ($requireCsrf, $loginUrl) {
+  if ($user['rol'] !== 'emprendedor') {
+    return $response->withHeader('Location', '/mi-puesto')->withStatus(303);
+  }
+
+  return null;
+};
+
+$app->get('/mi-puesto', function ($request, $response) use ($renderer, $loginUrl, $renderError) {
+  $user = currentUser();
+  if ($user === null) {
+    return $response->withHeader('Location', $loginUrl('/mi-puesto'))->withStatus(303);
+  }
+
+  $summary = ['productos' => 0, 'publicados' => 0, 'pendientes' => 0, 'emprendimientos' => 0];
+  if ($user['rol'] === 'emprendedor') {
+    try {
+      $pdo = (new Database())->getConnection();
+      $products = $pdo->prepare(
+        "SELECT COUNT(*) AS productos, COALESCE(SUM(estado = 'aprobado'), 0) AS publicados, COALESCE(SUM(estado = 'pendiente'), 0) AS pendientes FROM productos WHERE usuario_id = :usuario_id"
+      );
+      $products->execute(['usuario_id' => $user['id']]);
+      $summary = $products->fetch() ?: $summary;
+      $stores = $pdo->prepare('SELECT COUNT(*) FROM emprendimientos WHERE usuario_id = :usuario_id');
+      $stores->execute(['usuario_id' => $user['id']]);
+      $summary['emprendimientos'] = (int) $stores->fetchColumn();
+    } catch (Exception $exception) {
+      error_log($exception->getMessage());
+      return $renderError($response, 500, 'No se pudo cargar tu puesto.');
+    }
+  }
+
+  return view($renderer, $response, '/emprendimientos/puesto.php', [
+    'summary' => $summary,
+  ]);
+});
+
+$app->post('/emprendedor/activar', function ($request, $response) use ($requireCsrf, $loginUrl) {
   if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
     return $csrfFailure;
+  }
+
+  $user = currentUser();
+  if ($user === null) {
+    return $response->withHeader('Location', $loginUrl('/mi-puesto'))->withStatus(303);
+  }
+  if ($user['rol'] === 'emprendedor') {
+    return $response->withHeader('Location', '/mi-puesto')->withStatus(303);
+  }
+
+  $pdo = null;
+  try {
+    $pdo = (new Database())->getConnection();
+    $pdo->beginTransaction();
+    $account = $pdo->prepare(
+      'SELECT nombre, localidad, provincia FROM usuarios WHERE id = :id AND estado = \'activo\' FOR UPDATE'
+    );
+    $account->execute(['id' => $user['id']]);
+    $profile = $account->fetch();
+    if ($profile === false) {
+      $pdo->rollBack();
+      return $response->withHeader('Location', '/usuarios/login')->withStatus(303);
+    }
+
+    $pdo->prepare("UPDATE usuarios SET rol = 'emprendedor' WHERE id = :id")
+      ->execute(['id' => $user['id']]);
+    $store = $pdo->prepare('SELECT id FROM emprendimientos WHERE usuario_id = :usuario_id LIMIT 1');
+    $store->execute(['usuario_id' => $user['id']]);
+    if ($store->fetchColumn() === false) {
+      $createStore = $pdo->prepare(
+        "INSERT INTO emprendimientos (usuario_id, nombre, localidad, provincia, estado) VALUES (:usuario_id, :nombre, :localidad, :provincia, 'activo')"
+      );
+      $createStore->execute([
+        'usuario_id' => $user['id'],
+        'nombre' => mb_substr('Emprendimiento de ' . $profile['nombre'], 0, 255),
+        'localidad' => $profile['localidad'] !== '' ? $profile['localidad'] : null,
+        'provincia' => $profile['provincia'] !== '' ? $profile['provincia'] : null,
+      ]);
+    }
+    $pdo->commit();
+    $_SESSION['usuario']['rol'] = 'emprendedor';
+    $_SESSION['flash'] = 'Tu puesto está listo. Ya podés armar tu catálogo y publicar productos.';
+    return $response->withHeader('Location', '/mi-puesto')->withStatus(303);
+  } catch (Exception $exception) {
+    if ($pdo instanceof PDO && $pdo->inTransaction()) {
+      $pdo->rollBack();
+    }
+    error_log($exception->getMessage());
+    $_SESSION['flash'] = 'No se pudo activar tu puesto. Intentá nuevamente.';
+    return $response->withHeader('Location', '/mi-puesto')->withStatus(303);
+  }
+});
+
+$app->post('/productos/{id}/oferta', function ($request, $response, array $args) use ($requireCsrf, $loginUrl, $requireEntrepreneur) {
+  if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
+    return $csrfFailure;
+  }
+  if (($entrepreneurFailure = $requireEntrepreneur($request, $response)) !== null) {
+    return $entrepreneurFailure;
   }
   $user = currentUser();
   if ($user === null) {
@@ -558,7 +659,10 @@ $app->get('/emprendimientos', function ($request, $response) use ($renderer, $re
   }
 });
 
-$app->get('/mis-emprendimientos', function ($request, $response) use ($renderer, $loginUrl, $renderError) {
+$app->get('/mis-emprendimientos', function ($request, $response) use ($renderer, $loginUrl, $renderError, $requireEntrepreneur) {
+  if (($entrepreneurFailure = $requireEntrepreneur($request, $response)) !== null) {
+    return $entrepreneurFailure;
+  }
   $user = currentUser();
   if ($user === null) {
     return $response->withHeader('Location', $loginUrl('/mis-emprendimientos'))->withStatus(303);
@@ -578,7 +682,10 @@ $app->get('/mis-emprendimientos', function ($request, $response) use ($renderer,
   }
 });
 
-$app->get('/emprendimientos/crear', function ($request, $response) use ($renderer, $loginUrl) {
+$app->get('/emprendimientos/crear', function ($request, $response) use ($renderer, $loginUrl, $requireEntrepreneur) {
+  if (($entrepreneurFailure = $requireEntrepreneur($request, $response)) !== null) {
+    return $entrepreneurFailure;
+  }
   if (currentUser() === null) {
     return $response->withHeader('Location', $loginUrl('/emprendimientos/crear'))->withStatus(303);
   }
@@ -586,9 +693,12 @@ $app->get('/emprendimientos/crear', function ($request, $response) use ($rendere
   return view($renderer, $response, '/emprendimientos/form.php');
 });
 
-$app->post('/emprendimientos', function ($request, $response) use ($renderer, $requireCsrf, $loginUrl) {
+$app->post('/emprendimientos', function ($request, $response) use ($renderer, $requireCsrf, $loginUrl, $requireEntrepreneur) {
   if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
     return $csrfFailure;
+  }
+  if (($entrepreneurFailure = $requireEntrepreneur($request, $response)) !== null) {
+    return $entrepreneurFailure;
   }
 
   $user = currentUser();
@@ -696,7 +806,10 @@ $app->post('/emprendimientos', function ($request, $response) use ($renderer, $r
   }
 });
 
-$app->get('/emprendimientos/{id}/editar', function ($request, $response, array $args) use ($renderer, $renderError, $loginUrl) {
+$app->get('/emprendimientos/{id}/editar', function ($request, $response, array $args) use ($renderer, $renderError, $loginUrl, $requireEntrepreneur) {
+  if (($entrepreneurFailure = $requireEntrepreneur($request, $response)) !== null) {
+    return $entrepreneurFailure;
+  }
   $user = currentUser();
   if ($user === null) {
     return $response->withHeader('Location', $loginUrl('/emprendimientos/' . rawurlencode((string) $args['id']) . '/editar'))->withStatus(303);
@@ -722,9 +835,12 @@ $app->get('/emprendimientos/{id}/editar', function ($request, $response, array $
   }
 });
 
-$app->post('/emprendimientos/{id}/actualizar', function ($request, $response, array $args) use ($renderer, $requireCsrf, $loginUrl) {
+$app->post('/emprendimientos/{id}/actualizar', function ($request, $response, array $args) use ($renderer, $requireCsrf, $loginUrl, $requireEntrepreneur) {
   if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
     return $csrfFailure;
+  }
+  if (($entrepreneurFailure = $requireEntrepreneur($request, $response)) !== null) {
+    return $entrepreneurFailure;
   }
 
   $user = currentUser();
@@ -873,9 +989,12 @@ $app->post('/emprendimientos/{id}/actualizar', function ($request, $response, ar
   }
 });
 
-$app->post('/emprendimientos/{id}/estado', function ($request, $response, array $args) use ($requireCsrf, $loginUrl) {
+$app->post('/emprendimientos/{id}/estado', function ($request, $response, array $args) use ($requireCsrf, $loginUrl, $requireEntrepreneur) {
   if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
     return $csrfFailure;
+  }
+  if (($entrepreneurFailure = $requireEntrepreneur($request, $response)) !== null) {
+    return $entrepreneurFailure;
   }
   $user = currentUser();
   if ($user === null) {
@@ -1068,7 +1187,10 @@ $app->get('/emprendimientos/{id}', function ($request, $response, array $args) u
   }
 });
 
-$app->get('/mi-rendimiento', function ($request, $response) use ($renderer, $loginUrl, $renderError) {
+$app->get('/mi-rendimiento', function ($request, $response) use ($renderer, $loginUrl, $renderError, $requireEntrepreneur) {
+  if (($entrepreneurFailure = $requireEntrepreneur($request, $response)) !== null) {
+    return $entrepreneurFailure;
+  }
   $user = currentUser();
   if ($user === null) {
     return $response->withHeader('Location', $loginUrl('/mi-rendimiento'))->withStatus(303);
@@ -1255,7 +1377,10 @@ $app->get('/', function ($request, $response) use ($renderer) {
 
 $app->get('/productos', static fn($request, $response) => $response->withHeader('Location', '/')->withStatus(301));
 
-$app->get('/productos/create', function ($request, $response) use ($renderer, $loginUrl, $renderError) {
+$app->get('/productos/create', function ($request, $response) use ($renderer, $loginUrl, $renderError, $requireEntrepreneur) {
+  if (($entrepreneurFailure = $requireEntrepreneur($request, $response)) !== null) {
+    return $entrepreneurFailure;
+  }
   $user = currentUser();
   if ($user === null) {
     return $response->withHeader('Location', $loginUrl('/productos/create'))->withStatus(303);
@@ -1276,7 +1401,10 @@ $app->get('/productos/create', function ($request, $response) use ($renderer, $l
   }
 });
 
-$app->get('/productos/{id}/editar', function ($request, $response, array $args) use ($renderer, $renderError) {
+$app->get('/productos/{id}/editar', function ($request, $response, array $args) use ($renderer, $renderError, $requireEntrepreneur) {
+  if (($entrepreneurFailure = $requireEntrepreneur($request, $response)) !== null) {
+    return $entrepreneurFailure;
+  }
   $user = currentUser();
   if ($user === null) {
     return $response->withHeader('Location', '/usuarios/login')->withStatus(303);
@@ -1789,6 +1917,7 @@ $app->post('/usuarios', function ($request, $response) use ($renderer, $requireC
   $data = $request->getParsedBody() ?? [];
   $user = [
     'nombre' => trim((string) ($data['nombre'] ?? '')),
+    'rol' => trim((string) ($data['rol'] ?? '')),
     'gmail' => strtolower(trim((string) ($data['gmail'] ?? ''))),
     'telefono' => trim((string) ($data['telefono'] ?? '')),
     'direccion' => trim((string) ($data['direccion'] ?? '')),
@@ -1798,6 +1927,13 @@ $app->post('/usuarios', function ($request, $response) use ($renderer, $requireC
   ];
   $password = (string) ($data['password'] ?? '');
   $passwordConfirmation = (string) ($data['password_confirmation'] ?? '');
+
+  if (!in_array($user['rol'], ['visitante', 'emprendedor'], true)) {
+    return view($renderer, $response->withStatus(422), '/usuario/register.php', [
+      'error' => 'Elegí si querés participar como visitante o como emprendedor.',
+      'formData' => $user,
+    ]);
+  }
 
   if (
     $user['nombre'] === ''
@@ -1850,28 +1986,32 @@ $app->post('/usuarios', function ($request, $response) use ($renderer, $requireC
     );
     $stmt->execute([
       ...$user,
-      'rol' => 'usuario',
       'password_hash' => password_hash($password, PASSWORD_DEFAULT),
     ]);
     $userId = (int) $pdo->lastInsertId();
-    $store = $pdo->prepare(
-      "INSERT INTO emprendimientos (usuario_id, nombre, localidad, provincia, estado) VALUES (:usuario_id, :nombre, :localidad, :provincia, 'activo')"
-    );
-    $store->execute([
-      'usuario_id' => $userId,
-      'nombre' => mb_substr('Emprendimiento de ' . $user['nombre'], 0, 255),
-      'localidad' => $user['localidad'] !== '' ? $user['localidad'] : null,
-      'provincia' => $user['provincia'] !== '' ? $user['provincia'] : null,
-    ]);
+    if ($user['rol'] === 'emprendedor') {
+      $store = $pdo->prepare(
+        "INSERT INTO emprendimientos (usuario_id, nombre, localidad, provincia, estado) VALUES (:usuario_id, :nombre, :localidad, :provincia, 'activo')"
+      );
+      $store->execute([
+        'usuario_id' => $userId,
+        'nombre' => mb_substr('Emprendimiento de ' . $user['nombre'], 0, 255),
+        'localidad' => $user['localidad'] !== '' ? $user['localidad'] : null,
+        'provincia' => $user['provincia'] !== '' ? $user['provincia'] : null,
+      ]);
+    }
     $pdo->commit();
     setAuthenticatedUser([
       'id' => $userId,
       'nombre' => $user['nombre'],
       'gmail' => $user['gmail'],
+      'rol' => $user['rol'],
     ]);
-    $_SESSION['flash'] = 'Tu cuenta ya está lista.';
+    $_SESSION['flash'] = $user['rol'] === 'emprendedor'
+      ? 'Tu cuenta de emprendedor ya está lista. Empezá a armar tu puesto.'
+      : 'Tu cuenta ya está lista. Recorré la feria y encontrá lo que buscás.';
 
-    return $response->withHeader('Location', '/perfil')->withStatus(303);
+    return $response->withHeader('Location', $user['rol'] === 'emprendedor' ? '/mi-puesto' : '/')->withStatus(303);
   } catch (PDOException $exception) {
     if (isset($pdo) && $pdo->inTransaction()) {
       $pdo->rollBack();
@@ -1903,7 +2043,7 @@ $app->post('/usuarios/login', function ($request, $response) use ($renderer, $re
 
   try {
     $stmt = (new Database())->getConnection()->prepare(
-      'SELECT id, nombre, gmail, password_hash, estado FROM usuarios WHERE gmail = :gmail'
+      'SELECT id, nombre, gmail, rol, password_hash, estado FROM usuarios WHERE gmail = :gmail'
     );
     $stmt->execute(['gmail' => $gmail]);
     $user = $stmt->fetch();
@@ -2056,7 +2196,10 @@ $app->post('/perfil', function ($request, $response) use ($renderer, $requireCsr
   }
 });
 
-$app->get('/mis-productos', function ($request, $response) use ($renderer, $loginUrl, $renderError) {
+$app->get('/mis-productos', function ($request, $response) use ($renderer, $loginUrl, $renderError, $requireEntrepreneur) {
+  if (($entrepreneurFailure = $requireEntrepreneur($request, $response)) !== null) {
+    return $entrepreneurFailure;
+  }
   $user = currentUser();
   if ($user === null) {
     return $response->withHeader('Location', $loginUrl('/mis-productos'))->withStatus(303);
@@ -2079,9 +2222,12 @@ $app->get('/mis-productos', function ($request, $response) use ($renderer, $logi
   }
 });
 
-$app->post('/productos', function ($request, $response) use ($renderer, $requireCsrf, $loginUrl, $renderError) {
+$app->post('/productos', function ($request, $response) use ($renderer, $requireCsrf, $loginUrl, $renderError, $requireEntrepreneur) {
   if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
     return $csrfFailure;
+  }
+  if (($entrepreneurFailure = $requireEntrepreneur($request, $response)) !== null) {
+    return $entrepreneurFailure;
   }
 
   $user = currentUser();
@@ -2249,9 +2395,12 @@ $app->post('/productos', function ($request, $response) use ($renderer, $require
   }
 });
 
-$app->post('/productos/{id}/actualizar', function ($request, $response, array $args) use ($renderer, $requireCsrf, $renderError) {
+$app->post('/productos/{id}/actualizar', function ($request, $response, array $args) use ($renderer, $requireCsrf, $renderError, $requireEntrepreneur) {
   if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
     return $csrfFailure;
+  }
+  if (($entrepreneurFailure = $requireEntrepreneur($request, $response)) !== null) {
+    return $entrepreneurFailure;
   }
 
   $user = currentUser();
@@ -2441,9 +2590,12 @@ $app->post('/productos/{id}/actualizar', function ($request, $response, array $a
   }
 });
 
-$app->post('/productos/{id}/eliminar', function ($request, $response, array $args) use ($requireCsrf) {
+$app->post('/productos/{id}/eliminar', function ($request, $response, array $args) use ($requireCsrf, $requireEntrepreneur) {
   if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
     return $csrfFailure;
+  }
+  if (($entrepreneurFailure = $requireEntrepreneur($request, $response)) !== null) {
+    return $entrepreneurFailure;
   }
 
   $user = currentUser();
@@ -2959,7 +3111,10 @@ $app->post('/notificaciones/leer', function ($request, $response) use ($requireC
   return $response->withHeader('Location', '/notificaciones')->withStatus(303);
 });
 
-$app->get('/ventas', function ($request, $response) use ($renderer, $loginUrl, $renderError) {
+$app->get('/ventas', function ($request, $response) use ($renderer, $loginUrl, $renderError, $requireEntrepreneur) {
+  if (($entrepreneurFailure = $requireEntrepreneur($request, $response)) !== null) {
+    return $entrepreneurFailure;
+  }
   $user = currentUser();
   if ($user === null) {
     return $response->withHeader('Location', $loginUrl('/ventas'))->withStatus(303);
@@ -2980,9 +3135,12 @@ $app->get('/ventas', function ($request, $response) use ($renderer, $loginUrl, $
   }
 });
 
-$app->post('/ventas/{id}/cotizar-envio', function ($request, $response, array $args) use ($requireCsrf) {
+$app->post('/ventas/{id}/cotizar-envio', function ($request, $response, array $args) use ($requireCsrf, $requireEntrepreneur) {
   if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
     return $csrfFailure;
+  }
+  if (($entrepreneurFailure = $requireEntrepreneur($request, $response)) !== null) {
+    return $entrepreneurFailure;
   }
   $user = currentUser();
   if ($user === null) {
@@ -3038,9 +3196,12 @@ $app->post('/ventas/{id}/cotizar-envio', function ($request, $response, array $a
   return $response->withHeader('Location', '/ventas')->withStatus(303);
 });
 
-$app->post('/ventas/{id}/estado', function ($request, $response, array $args) use ($requireCsrf) {
+$app->post('/ventas/{id}/estado', function ($request, $response, array $args) use ($requireCsrf, $requireEntrepreneur) {
   if (($csrfFailure = $requireCsrf($request, $response)) !== null) {
     return $csrfFailure;
+  }
+  if (($entrepreneurFailure = $requireEntrepreneur($request, $response)) !== null) {
+    return $entrepreneurFailure;
   }
   $user = currentUser();
   if ($user === null) {

@@ -10,7 +10,7 @@ $formData = $formData ?? [];
 	<section class="form-card">
 		<p class="eyebrow">Un espacio para comprar y publicar</p>
 		<h1>Crear tu cuenta</h1>
-		<p class="form-intro">Completá tus datos para empezar. Todas las cuentas tienen los mismos permisos.</p>
+		<p class="form-intro">Elegí cómo querés participar. Si empezás como visitante, siempre vas a poder abrir tu puesto más adelante.</p>
 
 		<?php if ($error !== null): ?>
 			<p class="notice notice-error" role="alert"><?= html($error) ?></p>
@@ -18,6 +18,23 @@ $formData = $formData ?? [];
 
 		<form class="stacked-form" method="post" action="/usuarios">
 			<input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
+			<fieldset class="role-options">
+				<legend>¿Cómo querés recorrer la feria?</legend>
+				<label class="role-option">
+					<input type="radio" name="rol" value="visitante" required <?= ($formData['rol'] ?? '') === 'visitante' ? 'checked' : '' ?>>
+					<span class="role-option-content">
+						<strong>Quiero comprar</strong>
+						<span>Explorá productos, guardá favoritos y contactá emprendimientos.</span>
+					</span>
+				</label>
+				<label class="role-option">
+					<input type="radio" name="rol" value="emprendedor" required <?= ($formData['rol'] ?? '') === 'emprendedor' ? 'checked' : '' ?>>
+					<span class="role-option-content">
+						<strong>Quiero emprender</strong>
+						<span>Además de recorrer la feria, vas a tener tu puesto para publicar y administrar productos.</span>
+					</span>
+				</label>
+			</fieldset>
 			<div class="form-grid">
 				<div class="form-field">
 					<label for="nombre">Nombre</label>
