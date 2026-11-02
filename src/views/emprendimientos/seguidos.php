@@ -12,14 +12,25 @@ $emprendimientos = $emprendimientos ?? [];
   <?php else: ?>
     <section class="products-grid" aria-label="Emprendimientos seguidos">
       <?php foreach ($emprendimientos as $emprendimiento): ?>
-        <article class="form-card">
+        <?php
+        $primaryColor = isValidStoreColor((string) ($emprendimiento['color_primario'] ?? '')) ? (string) $emprendimiento['color_primario'] : '#166534';
+        $secondaryColor = isValidStoreColor((string) ($emprendimiento['color_secundario'] ?? '')) ? (string) $emprendimiento['color_secundario'] : '#f0fdf4';
+        ?>
+        <article class="form-card store-search-card" style="--store-primary: <?= html($primaryColor) ?>; --store-primary-text: <?= html(storeBrandColorText($primaryColor)) ?>; --store-secondary: <?= html($secondaryColor) ?>;">
+          <a class="store-search-cover" href="/emprendimientos/<?= rawurlencode((string) $emprendimiento['id']) ?>" aria-label="Ver <?= html((string) $emprendimiento['nombre']) ?>">
+            <?php if (!empty($emprendimiento['banner_path'])): ?><img src="<?= html((string) $emprendimiento['banner_path']) ?>" alt="" loading="lazy"><?php else: ?><span class="store-cover-default"><span class="store-category-art" aria-hidden="true"><?= html(storeCategoryIcon((string) $emprendimiento['rubro'])) ?></span><?= html(productCategories()[$emprendimiento['rubro']] ?? 'Emprendimiento') ?></span><?php endif; ?>
+            <?php if (!empty($emprendimiento['logo_path'])): ?><img class="store-search-logo" src="<?= html((string) $emprendimiento['logo_path']) ?>" alt="" loading="lazy"><?php endif; ?>
+          </a>
+          <div class="store-search-content">
           <h2><?= html((string) $emprendimiento['nombre']) ?></h2>
+          <p class="eyebrow"><?= html(productCategories()[$emprendimiento['rubro']] ?? 'Otros') ?></p>
           <?php if (!empty($emprendimiento['localidad']) || !empty($emprendimiento['provincia'])): ?>
             <p><?= html(implode(', ', array_filter([$emprendimiento['localidad'] ?? '', $emprendimiento['provincia'] ?? '']))) ?></p>
           <?php endif; ?>
           <p><?= html((string) $emprendimiento['descripcion']) ?></p>
           <p><?= (int) $emprendimiento['productos'] ?> productos aprobados</p>
           <a class="button button-outline" href="/emprendimientos/<?= rawurlencode((string) $emprendimiento['id']) ?>">Ver emprendimiento</a>
+          </div>
         </article>
       <?php endforeach; ?>
     </section>

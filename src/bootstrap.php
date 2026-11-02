@@ -15,6 +15,8 @@ require_once __DIR__ . '/utils/view.php';
 require_once __DIR__ . '/utils/products.php';
 require_once __DIR__ . '/utils/payments.php';
 require_once __DIR__ . '/utils/store_branding.php';
+require_once __DIR__ . '/utils/georef.php';
+require_once __DIR__ . '/utils/notifications.php';
 
 Dotenv::createImmutable(__DIR__ . '/..')->safeLoad();
 
@@ -56,7 +58,8 @@ $app->add(static function ($request, $handler) use ($app) {
   $user = $_SESSION['usuario'] ?? null;
   if (is_array($user) && isset($user['id'])) {
     try {
-      $stmt = (new Database())->getConnection()->prepare(
+      $pdo = (new Database())->getConnection();
+      $stmt = $pdo->prepare(
         'SELECT nombre, gmail, estado, rol FROM usuarios WHERE id = :id'
       );
       $stmt->execute(['id' => (int) $user['id']]);
@@ -64,11 +67,13 @@ $app->add(static function ($request, $handler) use ($app) {
 
       if ($account === false || $account['estado'] !== 'activo') {
         unset($_SESSION['usuario']);
+        unset($_SESSION['pending_notification_count']);
         session_regenerate_id(true);
       } else {
         $_SESSION['usuario']['nombre'] = (string) $account['nombre'];
         $_SESSION['usuario']['gmail'] = (string) $account['gmail'];
         $_SESSION['usuario']['rol'] = (string) $account['rol'];
+        $_SESSION['pending_notification_count'] = pendingNotificationCount($pdo, (int) $user['id']);
       }
     } catch (Throwable $exception) {
       error_log($exception->getMessage());
@@ -77,9 +82,56 @@ $app->add(static function ($request, $handler) use ($app) {
       $response->getBody()->write('No se pudo verificar el estado de la cuenta.');
       return $response;
     }
+  } else {
+    unset($_SESSION['pending_notification_count']);
   }
 
   return $handler->handle($request);
+});
+
+$app->get('/georef/provincias', function ($request, $response) {
+  try {
+    $result = georefGet('provincias', ['campos' => 'id,nombre', 'max' => 30]);
+    $response->getBody()->write(json_encode(
+      ['provincias' => $result['provincias'] ?? []],
+      JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE
+    ));
+    return $response->withHeader('Content-Type', 'application/json; charset=UTF-8')
+      ->withHeader('Cache-Control', 'public, max-age=86400');
+  } catch (GeorefServiceException $exception) {
+    error_log($exception->getMessage());
+    $response->getBody()->write('{"error":"No se pudo consultar el servicio de direcciones."}');
+    return $response->withStatus(503)->withHeader('Content-Type', 'application/json; charset=UTF-8');
+  }
+});
+
+$app->get('/georef/localidades', function ($request, $response) {
+  $query = $request->getQueryParams();
+  $province = trim((string) ($query['provincia'] ?? ''));
+  $term = mb_substr(trim((string) ($query['q'] ?? '')), 0, 100);
+  if ($province === '' || mb_strlen($term) < 2) {
+    $response->getBody()->write('{"error":"Elegí una provincia y escribí al menos dos letras."}');
+    return $response->withStatus(422)->withHeader('Content-Type', 'application/json; charset=UTF-8');
+  }
+
+  try {
+    $result = georefGet('localidades', [
+      'provincia' => $province,
+      'nombre' => $term,
+      'campos' => 'id,nombre,provincia',
+      'max' => 20,
+    ]);
+    $response->getBody()->write(json_encode(
+      ['localidades' => $result['localidades'] ?? []],
+      JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE
+    ));
+    return $response->withHeader('Content-Type', 'application/json; charset=UTF-8')
+      ->withHeader('Cache-Control', 'public, max-age=300');
+  } catch (GeorefServiceException $exception) {
+    error_log($exception->getMessage());
+    $response->getBody()->write('{"error":"No se pudo consultar el servicio de direcciones."}');
+    return $response->withStatus(503)->withHeader('Content-Type', 'application/json; charset=UTF-8');
+  }
 });
 
 $requireCsrf = static function ($request, $response) use ($renderError) {
@@ -382,7 +434,7 @@ $app->get('/conversaciones', function ($request, $response) use ($renderer, $log
   try {
     $pdo = (new Database())->getConnection();
     $stmt = $pdo->prepare(
-      'SELECT c.id, c.actualizado_en, e.nombre AS emprendimiento, p.nombre AS producto, CASE WHEN c.comprador_id = :usuario_comprador THEN v.nombre ELSE b.nombre END AS interlocutor, (SELECT m.contenido FROM mensajes m WHERE m.conversacion_id = c.id ORDER BY m.id DESC LIMIT 1) AS ultimo_mensaje, (SELECT COUNT(*) FROM mensajes m WHERE m.conversacion_id = c.id AND m.remitente_id <> :usuario_no_leido AND m.leido_en IS NULL) AS no_leidos FROM conversaciones c INNER JOIN usuarios b ON b.id = c.comprador_id INNER JOIN usuarios v ON v.id = c.vendedor_id LEFT JOIN emprendimientos e ON e.id = c.emprendimiento_id LEFT JOIN productos p ON p.id = c.producto_id WHERE c.comprador_id = :comprador_id OR c.vendedor_id = :vendedor_id ORDER BY c.actualizado_en DESC, c.id DESC'
+      'SELECT c.id, c.actualizado_en, e.nombre AS emprendimiento, p.nombre AS producto, CASE WHEN c.comprador_id = :usuario_comprador THEN v.nombre ELSE b.nombre END AS interlocutor, (SELECT m.contenido FROM mensajes m WHERE m.conversacion_id = c.id ORDER BY m.id DESC LIMIT 1) AS ultimo_mensaje, (SELECT m.remitente_id FROM mensajes m WHERE m.conversacion_id = c.id ORDER BY m.id DESC LIMIT 1) AS ultimo_remitente_id, (SELECT COUNT(*) FROM mensajes m WHERE m.conversacion_id = c.id AND m.remitente_id <> :usuario_no_leido AND m.leido_en IS NULL) AS no_leidos FROM conversaciones c INNER JOIN usuarios b ON b.id = c.comprador_id INNER JOIN usuarios v ON v.id = c.vendedor_id LEFT JOIN emprendimientos e ON e.id = c.emprendimiento_id LEFT JOIN productos p ON p.id = c.producto_id WHERE c.comprador_id = :comprador_id OR c.vendedor_id = :vendedor_id ORDER BY c.actualizado_en DESC, c.id DESC'
     );
     $stmt->execute([
       'usuario_comprador' => $user['id'],
@@ -521,6 +573,7 @@ $app->get('/conversaciones/{id}', function ($request, $response, array $args) us
     $pdo->prepare(
       'UPDATE mensajes SET leido_en = CURRENT_TIMESTAMP WHERE conversacion_id = :conversacion_id AND remitente_id <> :usuario_id AND leido_en IS NULL'
     )->execute(['conversacion_id' => $id, 'usuario_id' => $user['id']]);
+    $_SESSION['pending_notification_count'] = pendingNotificationCount($pdo, (int) $user['id']);
     $messages = $pdo->prepare(
       'SELECT id, remitente_id, contenido, creado_en, leido_en FROM mensajes WHERE conversacion_id = :conversacion_id ORDER BY id DESC LIMIT 100'
     );
@@ -614,6 +667,7 @@ $app->get('/conversaciones/{id}/nuevos', function ($request, $response, array $a
     $pdo->prepare(
       'UPDATE mensajes SET leido_en = CURRENT_TIMESTAMP WHERE conversacion_id = :conversacion_id AND remitente_id <> :usuario_id AND leido_en IS NULL'
     )->execute(['conversacion_id' => $id, 'usuario_id' => $user['id']]);
+    $_SESSION['pending_notification_count'] = pendingNotificationCount($pdo, (int) $user['id']);
     $stmt = $pdo->prepare(
       'SELECT id, remitente_id, contenido, creado_en FROM mensajes WHERE conversacion_id = :conversacion_id AND id > :despues ORDER BY id ASC LIMIT 100'
     );
@@ -635,23 +689,47 @@ $app->get('/conversaciones/{id}/nuevos', function ($request, $response, array $a
 
 $app->get('/emprendimientos', function ($request, $response) use ($renderer, $renderError) {
   $search = mb_substr(trim((string) ($request->getQueryParams()['q'] ?? '')), 0, 100);
+  $queryParams = $request->getQueryParams();
+  $category = trim((string) ($queryParams['rubro'] ?? ''));
+  $categories = productCategories();
+  if ($category !== '' && !array_key_exists($category, $categories)) {
+    return $renderError($response, 422, 'El rubro seleccionado no es válido.');
+  }
   try {
     $pdo = (new Database())->getConnection();
+    $conditions = ["e.estado = 'activo'", "u.estado = 'activo'"];
+    $parameters = [];
+    if ($category !== '') {
+      $conditions[] = 'e.rubro = :rubro';
+      $parameters['rubro'] = $category;
+    }
+
+    $searchTerms = preg_split('/\s+/u', $search, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+    foreach ($searchTerms as $index => $searchTerm) {
+      $parameterNames = [];
+      foreach (['nombre', 'descripcion', 'localidad', 'provincia'] as $field) {
+        $parameter = 'busqueda_' . $field . '_' . $index;
+        $parameterNames[] = ':' . $parameter;
+        $parameters[$parameter] = '%' . addcslashes(mb_strtolower($searchTerm), '\\%_') . '%';
+      }
+      $conditions[] = '(LOWER(e.nombre) LIKE ' . $parameterNames[0]
+        . ' OR LOWER(e.descripcion) LIKE ' . $parameterNames[1]
+        . ' OR LOWER(e.localidad) LIKE ' . $parameterNames[2]
+        . ' OR LOWER(e.provincia) LIKE ' . $parameterNames[3] . ')';
+    }
+
     $query = $pdo->prepare(
-      "SELECT e.id, e.nombre, e.descripcion, e.localidad, e.provincia, e.logo_path, e.color_primario, e.color_secundario, COUNT(p.id) AS productos FROM emprendimientos e INNER JOIN usuarios u ON u.id = e.usuario_id LEFT JOIN productos p ON p.emprendimiento_id = e.id AND p.estado = 'aprobado' WHERE e.estado = 'activo' AND u.estado = 'activo' AND (:name_term = '' OR e.nombre LIKE :name_search OR e.descripcion LIKE :description_search OR e.localidad LIKE :localidad_search OR e.provincia LIKE :provincia_search) GROUP BY e.id ORDER BY e.nombre ASC LIMIT 48"
+      "SELECT e.id, e.nombre, e.descripcion, e.localidad, e.provincia, e.logo_path, e.banner_path, e.color_primario, e.color_secundario, e.rubro, COUNT(p.id) AS productos FROM emprendimientos e INNER JOIN usuarios u ON u.id = e.usuario_id LEFT JOIN productos p ON p.emprendimiento_id = e.id AND p.estado = 'aprobado' WHERE "
+      . implode(' AND ', $conditions)
+      . ' GROUP BY e.id ORDER BY e.nombre ASC LIMIT 48'
     );
-    $term = $search === '' ? '' : '%' . addcslashes($search, '\\%_') . '%';
-    $query->execute([
-      'name_term' => $search,
-      'name_search' => $term,
-      'description_search' => $term,
-      'localidad_search' => $term,
-      'provincia_search' => $term,
-    ]);
+    $query->execute($parameters);
 
     return view($renderer, $response, '/emprendimientos/search.php', [
       'emprendimientos' => $query->fetchAll(),
       'search' => $search,
+      'category' => $category,
+      'categories' => $categories,
     ]);
   } catch (PDOException $exception) {
     error_log($exception->getMessage());
@@ -670,7 +748,7 @@ $app->get('/mis-emprendimientos', function ($request, $response) use ($renderer,
 
   try {
     $stmt = (new Database())->getConnection()->prepare(
-      'SELECT e.id, e.nombre, e.descripcion, e.localidad, e.provincia, e.estado, COUNT(p.id) AS productos FROM emprendimientos e LEFT JOIN productos p ON p.emprendimiento_id = e.id WHERE e.usuario_id = :usuario_id GROUP BY e.id ORDER BY e.id ASC'
+      'SELECT e.id, e.nombre, e.descripcion, e.rubro, e.localidad, e.provincia, e.estado, e.logo_path, e.banner_path, e.color_primario, e.color_secundario, COUNT(p.id) AS productos FROM emprendimientos e LEFT JOIN productos p ON p.emprendimiento_id = e.id WHERE e.usuario_id = :usuario_id GROUP BY e.id ORDER BY e.id ASC'
     );
     $stmt->execute(['usuario_id' => $user['id']]);
     return view($renderer, $response, '/emprendimientos/index.php', [
@@ -710,6 +788,7 @@ $app->post('/emprendimientos', function ($request, $response) use ($renderer, $r
   $store = [
     'nombre' => trim((string) ($data['nombre'] ?? '')),
     'descripcion' => trim((string) ($data['descripcion'] ?? '')),
+    'rubro' => trim((string) ($data['rubro'] ?? 'otros')),
     'localidad' => trim((string) ($data['localidad'] ?? '')),
     'provincia' => trim((string) ($data['provincia'] ?? '')),
     'color_primario' => strtolower(trim((string) ($data['color_primario'] ?? '#166534'))),
@@ -719,6 +798,7 @@ $app->post('/emprendimientos', function ($request, $response) use ($renderer, $r
     $store['nombre'] === ''
     || mb_strlen($store['nombre']) > 255
     || mb_strlen($store['descripcion']) > 500
+    || !array_key_exists($store['rubro'], productCategories())
     || mb_strlen($store['localidad']) > 100
     || mb_strlen($store['provincia']) > 100
     || !isValidStoreColor($store['color_primario'])
@@ -748,7 +828,7 @@ $app->post('/emprendimientos', function ($request, $response) use ($renderer, $r
     $pdo = (new Database())->getConnection();
     $pdo->beginTransaction();
     $stmt = $pdo->prepare(
-      "INSERT INTO emprendimientos (usuario_id, nombre, descripcion, localidad, provincia, estado, logo_path, banner_path, color_primario, color_secundario) VALUES (:usuario_id, :nombre, :descripcion, :localidad, :provincia, 'activo', :logo_path, :banner_path, :color_primario, :color_secundario)"
+      "INSERT INTO emprendimientos (usuario_id, nombre, descripcion, rubro, localidad, provincia, estado, logo_path, banner_path, color_primario, color_secundario) VALUES (:usuario_id, :nombre, :descripcion, :rubro, :localidad, :provincia, 'activo', :logo_path, :banner_path, :color_primario, :color_secundario)"
     );
     $stmt->execute([
       'usuario_id' => $user['id'],
@@ -817,7 +897,7 @@ $app->get('/emprendimientos/{id}/editar', function ($request, $response, array $
 
   try {
     $stmt = (new Database())->getConnection()->prepare(
-      'SELECT id, nombre, descripcion, localidad, provincia, estado, logo_path, banner_path, color_primario, color_secundario FROM emprendimientos WHERE id = :id AND usuario_id = :usuario_id'
+      'SELECT id, nombre, descripcion, rubro, localidad, provincia, estado, logo_path, banner_path, color_primario, color_secundario FROM emprendimientos WHERE id = :id AND usuario_id = :usuario_id'
     );
     $stmt->execute(['id' => (int) $args['id'], 'usuario_id' => $user['id']]);
     $store = $stmt->fetch();
@@ -853,6 +933,7 @@ $app->post('/emprendimientos/{id}/actualizar', function ($request, $response, ar
   $store = [
     'nombre' => trim((string) ($data['nombre'] ?? '')),
     'descripcion' => trim((string) ($data['descripcion'] ?? '')),
+    'rubro' => trim((string) ($data['rubro'] ?? 'otros')),
     'localidad' => trim((string) ($data['localidad'] ?? '')),
     'provincia' => trim((string) ($data['provincia'] ?? '')),
     'color_primario' => strtolower(trim((string) ($data['color_primario'] ?? '#166534'))),
@@ -863,6 +944,7 @@ $app->post('/emprendimientos/{id}/actualizar', function ($request, $response, ar
     || $store['nombre'] === ''
     || mb_strlen($store['nombre']) > 255
     || mb_strlen($store['descripcion']) > 500
+    || !array_key_exists($store['rubro'], productCategories())
     || mb_strlen($store['localidad']) > 100
     || mb_strlen($store['provincia']) > 100
     || !isValidStoreColor($store['color_primario'])
@@ -920,7 +1002,7 @@ $app->post('/emprendimientos/{id}/actualizar', function ($request, $response, ar
     }
 
     $stmt = $pdo->prepare(
-      'UPDATE emprendimientos SET nombre = :nombre, descripcion = :descripcion, localidad = :localidad, provincia = :provincia, logo_path = :logo_path, banner_path = :banner_path, color_primario = :color_primario, color_secundario = :color_secundario WHERE id = :id AND usuario_id = :usuario_id'
+      'UPDATE emprendimientos SET nombre = :nombre, descripcion = :descripcion, rubro = :rubro, localidad = :localidad, provincia = :provincia, logo_path = :logo_path, banner_path = :banner_path, color_primario = :color_primario, color_secundario = :color_secundario WHERE id = :id AND usuario_id = :usuario_id'
     );
     $stmt->execute([
       ...$store,
@@ -1046,7 +1128,7 @@ $app->get('/emprendimientos/seguidos', function ($request, $response) use ($rend
 
   try {
     $stmt = (new Database())->getConnection()->prepare(
-      "SELECT e.id, e.nombre, e.descripcion, e.localidad, e.provincia, COUNT(DISTINCT p.id) AS productos FROM emprendimiento_seguidores s INNER JOIN emprendimientos e ON e.id = s.emprendimiento_id INNER JOIN usuarios u ON u.id = e.usuario_id LEFT JOIN productos p ON p.emprendimiento_id = e.id AND p.estado = 'aprobado' WHERE s.usuario_id = :usuario_id AND e.estado = 'activo' AND u.estado = 'activo' GROUP BY e.id ORDER BY e.nombre ASC"
+      "SELECT e.id, e.nombre, e.descripcion, e.rubro, e.localidad, e.provincia, e.banner_path, e.logo_path, e.color_primario, e.color_secundario, COUNT(DISTINCT p.id) AS productos FROM emprendimiento_seguidores s INNER JOIN emprendimientos e ON e.id = s.emprendimiento_id INNER JOIN usuarios u ON u.id = e.usuario_id LEFT JOIN productos p ON p.emprendimiento_id = e.id AND p.estado = 'aprobado' WHERE s.usuario_id = :usuario_id AND e.estado = 'activo' AND u.estado = 'activo' GROUP BY e.id ORDER BY e.nombre ASC"
     );
     $stmt->execute(['usuario_id' => $user['id']]);
     return view($renderer, $response, '/emprendimientos/seguidos.php', [
@@ -1129,7 +1211,7 @@ $app->get('/emprendimientos/{id}', function ($request, $response, array $args) u
   try {
     $pdo = (new Database())->getConnection();
     $storeQuery = $pdo->prepare(
-      "SELECT e.id, e.usuario_id, e.nombre, e.descripcion, e.localidad, e.provincia, e.logo_path, e.banner_path, e.color_primario, e.color_secundario, u.nombre AS vendedor_nombre FROM emprendimientos e INNER JOIN usuarios u ON u.id = e.usuario_id WHERE e.id = :id AND e.estado = 'activo' AND u.estado = 'activo'"
+      "SELECT e.id, e.usuario_id, e.nombre, e.descripcion, e.rubro, e.localidad, e.provincia, e.logo_path, e.banner_path, e.color_primario, e.color_secundario, u.nombre AS vendedor_nombre FROM emprendimientos e INNER JOIN usuarios u ON u.id = e.usuario_id WHERE e.id = :id AND e.estado = 'activo' AND u.estado = 'activo'"
     );
     $storeQuery->execute(['id' => $id]);
     $store = $storeQuery->fetch();
@@ -1138,10 +1220,20 @@ $app->get('/emprendimientos/{id}', function ($request, $response, array $args) u
     }
 
     $productsQuery = $pdo->prepare(
-      "SELECT p.id, p.nombre, p.precio AS precio_original, " . currentProductPriceSql('p') . " AS precio, " . productOfferActiveSql('p') . " AS oferta_vigente, p.oferta_fin, p.descripcion, p.categoria, p.condicion, p.unidad, p.cantidad_minima, p.stock, COALESCE(r.promedio, 0) AS promedio_resenas, COALESCE(r.cantidad, 0) AS cantidad_resenas FROM productos p LEFT JOIN (SELECT producto_id, AVG(puntaje) AS promedio, COUNT(*) AS cantidad FROM producto_resenas GROUP BY producto_id) r ON r.producto_id = p.id WHERE p.emprendimiento_id = :emprendimiento_id AND p.estado = 'aprobado' ORDER BY p.id DESC LIMIT 48"
+      "SELECT p.id, p.usuario_id, p.nombre, p.precio AS precio_original, " . currentProductPriceSql('p') . " AS precio, " . productOfferActiveSql('p') . " AS oferta_vigente, p.oferta_fin, p.descripcion, p.categoria, p.condicion, p.unidad, p.cantidad_minima, p.stock, COALESCE(r.promedio, 0) AS promedio_resenas, COALESCE(r.cantidad, 0) AS cantidad_resenas FROM productos p LEFT JOIN (SELECT producto_id, AVG(puntaje) AS promedio, COUNT(*) AS cantidad FROM producto_resenas GROUP BY producto_id) r ON r.producto_id = p.id WHERE p.emprendimiento_id = :emprendimiento_id AND p.estado = 'aprobado' ORDER BY p.id DESC LIMIT 48"
     );
     $productsQuery->execute(['emprendimiento_id' => $id]);
     $storeProducts = attachProductImages($pdo, $productsQuery->fetchAll());
+    $favoriteProductIds = [];
+    if (currentUser() !== null && $storeProducts !== []) {
+      $productIds = array_map(static fn(array $product): int => (int) $product['id'], $storeProducts);
+      $placeholders = implode(',', array_fill(0, count($productIds), '?'));
+      $favoritesQuery = $pdo->prepare(
+        "SELECT producto_id FROM producto_favoritos WHERE usuario_id = ? AND producto_id IN ($placeholders)"
+      );
+      $favoritesQuery->execute([currentUser()['id'], ...$productIds]);
+      $favoriteProductIds = array_map('intval', $favoritesQuery->fetchAll(PDO::FETCH_COLUMN));
+    }
     $ratingQuery = $pdo->prepare(
       'SELECT AVG(puntaje) AS promedio, COUNT(*) AS cantidad FROM producto_resenas WHERE vendedor_id = :vendedor_id'
     );
@@ -1167,6 +1259,7 @@ $app->get('/emprendimientos/{id}', function ($request, $response, array $args) u
         'id' => $store['id'],
         'usuario_id' => $store['usuario_id'],
         'nombre' => $store['nombre'],
+        'rubro' => $store['rubro'],
         'localidad' => $store['localidad'],
         'provincia' => $store['provincia'],
         'descripcion_vendedor' => $store['descripcion'],
@@ -1176,6 +1269,7 @@ $app->get('/emprendimientos/{id}', function ($request, $response, array $args) u
         'color_secundario' => $store['color_secundario'],
       ],
       'sellerProducts' => $storeProducts,
+      'favoriteProductIds' => $favoriteProductIds,
       'sellerRating' => $ratingQuery->fetch() ?: ['promedio' => null, 'cantidad' => 0],
       'followerCount' => (int) $followersQuery->fetchColumn(),
       'isFollowing' => $isFollowing,
@@ -1525,7 +1619,7 @@ $app->get('/favoritos', function ($request, $response) use ($renderer, $loginUrl
   try {
     $pdo = (new Database())->getConnection();
     $query = $pdo->prepare(
-      "SELECT p.id, p.nombre, p.precio AS precio_original, " . currentProductPriceSql('p') . " AS precio, " . productOfferActiveSql('p') . " AS oferta_vigente, p.oferta_fin, p.descripcion, p.categoria, p.condicion, p.unidad, p.cantidad_minima, p.stock FROM producto_favoritos f INNER JOIN productos p ON p.id = f.producto_id INNER JOIN emprendimientos e ON e.id = p.emprendimiento_id WHERE f.usuario_id = :usuario_id AND p.estado = 'aprobado' AND e.estado = 'activo' ORDER BY f.creado_en DESC"
+    "SELECT p.id, p.usuario_id, p.nombre, p.precio AS precio_original, " . currentProductPriceSql('p') . " AS precio, " . productOfferActiveSql('p') . " AS oferta_vigente, p.oferta_fin, p.descripcion, p.categoria, p.condicion, p.unidad, p.cantidad_minima, p.stock FROM producto_favoritos f INNER JOIN productos p ON p.id = f.producto_id INNER JOIN emprendimientos e ON e.id = p.emprendimiento_id WHERE f.usuario_id = :usuario_id AND p.estado = 'aprobado' AND e.estado = 'activo' ORDER BY f.creado_en DESC"
     );
     $query->execute(['usuario_id' => $user['id']]);
     return view($renderer, $response, '/productos/favoritos.php', [
@@ -1671,8 +1765,10 @@ $app->post('/productos/{id}/favorito', function ($request, $response, array $arg
 
   $user = currentUser();
   $id = filter_var($args['id'] ?? null, FILTER_VALIDATE_INT);
+  $data = $request->getParsedBody() ?? [];
+  $returnTo = safeReturnPath($data['return_to'] ?? ($id !== false && $id > 0 ? '/productos/' . $id : '/'));
   if ($user === null) {
-    return $response->withHeader('Location', $loginUrl('/productos/' . max(1, (int) $id)))->withStatus(303);
+    return $response->withHeader('Location', $loginUrl($returnTo))->withStatus(303);
   }
   if ($id === false || $id < 1) {
     return $renderError($response, 404, 'No encontramos ese producto.');
@@ -1694,7 +1790,7 @@ $app->post('/productos/{id}/favorito', function ($request, $response, array $arg
     } else {
       $_SESSION['flash'] = 'Producto quitado de tus favoritos.';
     }
-    return $response->withHeader('Location', '/productos/' . $id)->withStatus(303);
+    return $response->withHeader('Location', $returnTo)->withStatus(303);
   } catch (PDOException $exception) {
     error_log($exception->getMessage());
     return $renderError($response, 500, 'No se pudo actualizar tu lista de favoritos.');
@@ -1940,17 +2036,35 @@ $app->post('/usuarios', function ($request, $response) use ($renderer, $requireC
     || $user['gmail'] === ''
     || $user['telefono'] === ''
     || $user['direccion'] === ''
+    || $user['localidad'] === ''
+    || $user['provincia'] === ''
     || !filter_var($user['gmail'], FILTER_VALIDATE_EMAIL)
     || strlen($user['nombre']) > 255
     || strlen($user['gmail']) > 255
-    || strlen($user['telefono']) > 30
+    || strlen($user['telefono']) > 20
     || strlen($user['direccion']) > 255
     || strlen($user['localidad']) > 100
     || strlen($user['provincia']) > 100
     || strlen($user['codigo_postal']) > 12
+    || !argentinaPhoneIsValid($user['telefono'])
   ) {
     return view($renderer, $response->withStatus(422), '/usuario/register.php', [
-      'error' => 'Completá todos los campos con datos válidos.',
+      'error' => 'Completá los campos y verificá que el teléfono tenga 10 dígitos argentinos.',
+      'formData' => $user,
+    ]);
+  }
+
+  try {
+    if (!argentinaAddressIsValid($user['direccion'], $user['localidad'], $user['provincia'])) {
+      return view($renderer, $response->withStatus(422), '/usuario/register.php', [
+        'error' => 'La dirección, localidad y provincia no coinciden con una dirección existente en Argentina.',
+        'formData' => $user,
+      ]);
+    }
+  } catch (GeorefServiceException $exception) {
+    error_log($exception->getMessage());
+    return view($renderer, $response->withStatus(503), '/usuario/register.php', [
+      'error' => 'No pudimos verificar la dirección ahora. Intentá nuevamente cuando el servicio geográfico esté disponible.',
       'formData' => $user,
     ]);
   }
@@ -3084,12 +3198,23 @@ $app->get('/notificaciones', function ($request, $response) use ($renderer, $log
     return $response->withHeader('Location', $loginUrl('/notificaciones'))->withStatus(303);
   }
   try {
-    $stmt = (new Database())->getConnection()->prepare(
+    $pdo = (new Database())->getConnection();
+    $stmt = $pdo->prepare(
       'SELECT id, tipo, mensaje, enlace, leida_en, creado_en FROM notificaciones WHERE usuario_id = :usuario_id ORDER BY id DESC LIMIT 100'
     );
     $stmt->execute(['usuario_id' => $user['id']]);
+    $unreadMessages = $pdo->prepare(
+      'SELECT m.id, m.contenido, m.creado_en, c.id AS conversacion_id, CASE WHEN c.comprador_id = :comprador_id THEN v.nombre ELSE b.nombre END AS interlocutor FROM mensajes m INNER JOIN conversaciones c ON c.id = m.conversacion_id INNER JOIN usuarios b ON b.id = c.comprador_id INNER JOIN usuarios v ON v.id = c.vendedor_id WHERE (c.comprador_id = :comprador_filtro OR c.vendedor_id = :vendedor_filtro) AND m.remitente_id <> :remitente_id AND m.leido_en IS NULL ORDER BY m.id DESC LIMIT 100'
+    );
+    $unreadMessages->execute([
+      'comprador_id' => $user['id'],
+      'comprador_filtro' => $user['id'],
+      'vendedor_filtro' => $user['id'],
+      'remitente_id' => $user['id'],
+    ]);
     return view($renderer, $response, '/notificaciones/index.php', [
       'notificaciones' => $stmt->fetchAll(),
+      'mensajesSinLeer' => $unreadMessages->fetchAll(),
     ]);
   } catch (PDOException $exception) {
     error_log($exception->getMessage());
@@ -3105,9 +3230,11 @@ $app->post('/notificaciones/leer', function ($request, $response) use ($requireC
   if ($user === null) {
     return $response->withHeader('Location', '/usuarios/login')->withStatus(303);
   }
-  (new Database())->getConnection()->prepare(
+  $pdo = (new Database())->getConnection();
+  $pdo->prepare(
     'UPDATE notificaciones SET leida_en = CURRENT_TIMESTAMP WHERE usuario_id = :usuario_id AND leida_en IS NULL'
   )->execute(['usuario_id' => $user['id']]);
+  $_SESSION['pending_notification_count'] = pendingNotificationCount($pdo, (int) $user['id']);
   return $response->withHeader('Location', '/notificaciones')->withStatus(303);
 });
 

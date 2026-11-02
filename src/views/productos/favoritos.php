@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 $productos = $productos ?? [];
 $categorias = $categorias ?? productCategories();
+$returnTo = '/favoritos';
 ?>
 <main class="page-content">
   <a class="back-link" href="/">← Volver al catálogo</a>
@@ -18,13 +19,20 @@ $categorias = $categorias ?? productCategories();
     <section class="products-grid">
       <?php foreach ($productos as $producto): ?>
         <article class="product-card">
-          <a class="product-card-image-link" href="/productos/<?= rawurlencode((string) $producto['id']) ?>">
-            <?php if (!empty($producto['imagenes'][0]['url'])): ?>
-              <img class="product-card-image" src="<?= html($producto['imagenes'][0]['url']) ?>" alt="<?= html((string) $producto['nombre']) ?>" loading="lazy">
-            <?php else: ?>
-              <span class="product-card-image-placeholder">Sin imagen</span>
-            <?php endif; ?>
-          </a>
+          <div class="product-card-media">
+            <a class="product-card-image-link" href="/productos/<?= rawurlencode((string) $producto['id']) ?>">
+              <?php if (!empty($producto['imagenes'][0]['url'])): ?>
+                <img class="product-card-image" src="<?= html($producto['imagenes'][0]['url']) ?>" alt="<?= html((string) $producto['nombre']) ?>" loading="lazy">
+              <?php else: ?>
+                <span class="product-card-image-placeholder">Sin imagen</span>
+              <?php endif; ?>
+            </a>
+            <form class="product-favorite-form" method="post" action="/productos/<?= rawurlencode((string) $producto['id']) ?>/favorito">
+              <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
+              <input type="hidden" name="return_to" value="<?= html($returnTo) ?>">
+              <button class="favorite-heart" type="submit" aria-label="Quitar de favoritos">♥</button>
+            </form>
+          </div>
           <div class="product-info">
             <span class="product-tag"><?= html($categorias[$producto['categoria']] ?? 'Otros') ?></span>
             <h2 class="product-name"><a class="product-card-title-link" href="/productos/<?= rawurlencode((string) $producto['id']) ?>"><?= html((string) $producto['nombre']) ?></a></h2>
@@ -35,10 +43,20 @@ $categorias = $categorias ?? productCategories();
             <?php else: ?>
               <span class="price-wholesale"><?= html(formatArs($producto['precio'])) ?></span>
             <?php endif; ?>
-            <form method="post" action="/productos/<?= rawurlencode((string) $producto['id']) ?>/favorito">
-              <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
-              <button class="button button-outline" type="submit">Quitar de favoritos</button>
-            </form>
+            <div class="product-card-actions">
+              <?php if ((int) $producto['usuario_id'] !== (int) $currentUser['id']): ?>
+                <?php if ($producto['stock'] !== null && (int) $producto['stock'] >= (int) $producto['cantidad_minima']): ?>
+                  <form method="post" action="/carrito/agregar">
+                    <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
+                    <input type="hidden" name="producto_id" value="<?= html((string) $producto['id']) ?>">
+                    <input type="hidden" name="cantidad" value="<?= (int) $producto['cantidad_minima'] ?>">
+                    <button class="button button-primary" type="submit">Agregar al carrito</button>
+                  </form>
+                <?php else: ?>
+                  <button class="button button-outline" type="button" disabled>Sin stock disponible</button>
+                <?php endif; ?>
+              <?php endif; ?>
+            </div>
           </div>
         </article>
       <?php endforeach; ?>

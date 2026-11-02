@@ -25,6 +25,7 @@ function view(
   ?string $layout = null,
 ): ResponseInterface {
   $data['currentUser'] = currentUser();
+  $data['pendingNotificationCount'] = (int) ($_SESSION['pending_notification_count'] ?? 0);
   $data['csrfToken'] = csrfToken();
   $data['flash'] = $_SESSION['flash'] ?? null;
   unset($_SESSION['flash']);

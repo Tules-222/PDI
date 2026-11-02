@@ -7,6 +7,7 @@ $sellerProducts = $sellerProducts ?? [];
 $sellerRating = $sellerRating ?? ['promedio' => null, 'cantidad' => 0];
 $followerCount = $followerCount ?? 0;
 $isFollowing = $isFollowing ?? false;
+$favoriteProductIds = $favoriteProductIds ?? [];
 $primaryColor = isValidStoreColor((string) ($seller['color_primario'] ?? '')) ? (string) $seller['color_primario'] : '#166534';
 $secondaryColor = isValidStoreColor((string) ($seller['color_secundario'] ?? '')) ? (string) $seller['color_secundario'] : '#f0fdf4';
 ?>
@@ -15,11 +16,16 @@ $secondaryColor = isValidStoreColor((string) ($seller['color_secundario'] ?? '')
   <section class="seller-profile form-card" style="--store-primary: <?= html($primaryColor) ?>; --store-primary-text: <?= html(storeBrandColorText($primaryColor)) ?>; --store-secondary: <?= html($secondaryColor) ?>; --store-secondary-text: <?= html(storeBrandColorText($secondaryColor)) ?>;">
     <?php if (!empty($seller['banner_path'])): ?>
       <div class="seller-brand-banner"><img src="<?= html((string) $seller['banner_path']) ?>" alt="Banner de <?= html((string) $seller['nombre']) ?>"></div>
+    <?php else: ?>
+      <div class="seller-brand-banner seller-brand-banner-default" aria-hidden="true">
+        <span class="store-category-art"><?= html(storeCategoryIcon((string) ($seller['rubro'] ?? 'otros'))) ?></span>
+        <strong><?= html(productCategories()[$seller['rubro'] ?? 'otros'] ?? 'Otros') ?></strong>
+      </div>
     <?php endif; ?>
     <div class="seller-brand-heading">
       <?php if (!empty($seller['logo_path'])): ?><img class="seller-brand-logo" src="<?= html((string) $seller['logo_path']) ?>" alt="Logo de <?= html((string) $seller['nombre']) ?>"><?php endif; ?>
       <div>
-        <p class="eyebrow">Emprendimiento de Emprendi</p>
+        <p class="eyebrow"><?= html(productCategories()[$seller['rubro'] ?? 'otros'] ?? 'Otros') ?> · Emprendimiento</p>
         <h1><?= html((string) $seller['nombre']) ?></h1>
       </div>
     </div>
@@ -31,7 +37,7 @@ $secondaryColor = isValidStoreColor((string) ($seller['color_secundario'] ?? '')
     <?php else: ?>
       <p class="product-rating-empty">Todavía sin opiniones verificadas</p>
     <?php endif; ?>
-    <p class="store-follow-count"><?= (int) $followerCount ?> seguidores</p>
+    <p class="store-follow-count"><?= (int) $followerCount ?> seguidores de esta tienda</p>
     <?php if (!empty($seller['descripcion_vendedor'])): ?><p><?= html((string) $seller['descripcion_vendedor']) ?></p><?php endif; ?>
     <p class="seller-trust-note">Las opiniones se habilitan únicamente después de confirmar una entrega.</p>
     <?php if ($currentUser === null): ?>
@@ -76,13 +82,24 @@ $secondaryColor = isValidStoreColor((string) ($seller['color_secundario'] ?? '')
       <div class="products-grid">
         <?php foreach ($sellerProducts as $producto): ?>
           <article class="product-card">
-            <a class="product-card-image-link" href="/productos/<?= rawurlencode((string) $producto['id']) ?>">
-              <?php if (!empty($producto['imagenes'][0]['url'])): ?>
-                <img class="product-card-image" src="<?= html($producto['imagenes'][0]['url']) ?>" alt="<?= html((string) $producto['nombre']) ?>" loading="lazy">
-              <?php else: ?>
-                <span class="product-card-image-placeholder">Sin imagen</span>
+            <div class="product-card-media">
+              <a class="product-card-image-link" href="/productos/<?= rawurlencode((string) $producto['id']) ?>">
+                <?php if (!empty($producto['imagenes'][0]['url'])): ?>
+                  <img class="product-card-image" src="<?= html($producto['imagenes'][0]['url']) ?>" alt="<?= html((string) $producto['nombre']) ?>" loading="lazy">
+                <?php else: ?>
+                  <span class="product-card-image-placeholder">Sin imagen</span>
+                <?php endif; ?>
+              </a>
+              <?php if ($currentUser === null): ?>
+                <a class="favorite-heart favorite-heart-link" href="/usuarios/login?return_to=<?= rawurlencode('/productos/' . (string) $producto['id']) ?>" aria-label="Ingresá para guardar en favoritos">♡</a>
+              <?php elseif ((int) $producto['usuario_id'] !== (int) $currentUser['id']): ?>
+                <form class="product-favorite-form" method="post" action="/productos/<?= rawurlencode((string) $producto['id']) ?>/favorito">
+                  <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
+                  <input type="hidden" name="return_to" value="<?= html('/emprendimientos/' . (string) $seller['id']) ?>">
+                  <button class="favorite-heart" type="submit" aria-label="<?= in_array((int) $producto['id'], $favoriteProductIds, true) ? 'Quitar de favoritos' : 'Guardar en favoritos' ?>"><?= in_array((int) $producto['id'], $favoriteProductIds, true) ? '♥' : '♡' ?></button>
+                </form>
               <?php endif; ?>
-            </a>
+            </div>
             <div class="product-info">
               <span class="product-tag"><?= $producto['stock'] !== null && (int) $producto['stock'] > 0 ? 'Stock confirmado' : 'Consultar disponibilidad' ?></span>
               <h3 class="product-name"><a class="product-card-title-link" href="/productos/<?= rawurlencode((string) $producto['id']) ?>"><?= html((string) $producto['nombre']) ?></a></h3>
@@ -95,6 +112,22 @@ $secondaryColor = isValidStoreColor((string) ($seller['color_secundario'] ?? '')
                 <span class="price-wholesale"><?= html(formatArs($producto['precio'])) ?></span>
               <?php endif; ?>
               <span class="price-label">por <?= html((string) $producto['unidad']) ?> · compra mínima <?= (int) $producto['cantidad_minima'] ?></span>
+              <div class="product-card-actions">
+                <?php if ($currentUser !== null && (int) $producto['usuario_id'] !== (int) $currentUser['id']): ?>
+                  <?php if ($producto['stock'] !== null && (int) $producto['stock'] >= (int) $producto['cantidad_minima']): ?>
+                    <form method="post" action="/carrito/agregar">
+                      <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
+                      <input type="hidden" name="producto_id" value="<?= html((string) $producto['id']) ?>">
+                      <input type="hidden" name="cantidad" value="<?= (int) $producto['cantidad_minima'] ?>">
+                      <button class="button button-primary" type="submit">Agregar al carrito</button>
+                    </form>
+                  <?php else: ?>
+                    <button class="button button-outline" type="button" disabled>Sin stock disponible</button>
+                  <?php endif; ?>
+                <?php elseif ($currentUser === null): ?>
+                  <a class="button button-primary" href="/usuarios/login?return_to=<?= rawurlencode('/productos/' . (string) $producto['id']) ?>">Ingresá para comprar</a>
+                <?php endif; ?>
+              </div>
             </div>
           </article>
         <?php endforeach; ?>

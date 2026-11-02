@@ -39,6 +39,24 @@ function storeBrandColorText(string $color): string
   return $whiteContrast >= $darkContrast ? '#ffffff' : '#0f172a';
 }
 
+function storeCategoryIcon(string $category): string
+{
+  return match ($category) {
+    'tecnologia' => '⌘',
+    'hogar' => '⌂',
+    'ropa' => '✂',
+    'carpinteria' => '⚒',
+    'alimentos' => '♨',
+    'belleza' => '✦',
+    'deportes' => '⚽',
+    'jardin' => '✿',
+    'artesanias' => '✾',
+    'juguetes' => '♧',
+    'libros' => '▤',
+    default => '✧',
+  };
+}
+
 function validateStoreBrandImage(mixed $upload, string $kind): ?UploadedFileInterface
 {
   if ($upload === null || !$upload instanceof UploadedFileInterface) {

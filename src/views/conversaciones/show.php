@@ -17,6 +17,7 @@ $lastMessageId = $lastMessageId ?? 0;
     <ol class="chat-messages" id="chat-messages" data-conversation-id="<?= html((string) $conversacion['id']) ?>" data-current-user="<?= (int) $currentUserId ?>" data-last-id="<?= (int) $lastMessageId ?>" aria-live="polite">
       <?php foreach ($mensajes as $mensaje): ?>
         <li class="chat-message <?= (int) $mensaje['remitente_id'] === (int) $currentUserId ? 'chat-message-mine' : '' ?>">
+          <span class="chat-message-direction"><?= (int) $mensaje['remitente_id'] === (int) $currentUserId ? 'Enviado' : 'Recibido' ?></span>
           <p><?= html((string) $mensaje['contenido']) ?></p>
           <time><?= html((string) $mensaje['creado_en']) ?></time>
         </li>
@@ -56,12 +57,16 @@ $lastMessageId = $lastMessageId ?? 0;
 
       for (const message of payload.mensajes) {
         const item = document.createElement('li');
-        item.className = `chat-message${Number(message.remitente_id) === currentUserId ? ' chat-message-mine' : ''}`;
+        const isMine = Number(message.remitente_id) === currentUserId;
+        item.className = `chat-message${isMine ? ' chat-message-mine' : ''}`;
+        const direction = document.createElement('span');
+        direction.className = 'chat-message-direction';
+        direction.textContent = isMine ? 'Enviado' : 'Recibido';
         const content = document.createElement('p');
         content.textContent = message.contenido;
         const time = document.createElement('time');
         time.textContent = message.creado_en;
-        item.append(content, time);
+        item.append(direction, content, time);
         list.append(item);
         lastId = Math.max(lastId, Number(message.id));
       }
