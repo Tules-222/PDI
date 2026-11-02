@@ -29,7 +29,12 @@ $categorias = $categorias ?? productCategories();
             <span class="product-tag"><?= html($categorias[$producto['categoria']] ?? 'Otros') ?></span>
             <h2 class="product-name"><a class="product-card-title-link" href="/productos/<?= rawurlencode((string) $producto['id']) ?>"><?= html((string) $producto['nombre']) ?></a></h2>
             <p class="product-description"><?= html((string) $producto['descripcion']) ?></p>
-            <span class="price-wholesale"><?= html(formatArs($producto['precio'])) ?></span>
+            <?php if (!empty($producto['oferta_vigente'])): ?>
+              <span class="price-original"><del><?= html(formatArs($producto['precio_original'])) ?></del></span>
+              <span class="price-wholesale"><?= html(formatArs($producto['precio'])) ?> <span class="product-tag">Oferta</span></span>
+            <?php else: ?>
+              <span class="price-wholesale"><?= html(formatArs($producto['precio'])) ?></span>
+            <?php endif; ?>
             <form method="post" action="/productos/<?= rawurlencode((string) $producto['id']) ?>/favorito">
               <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
               <button class="button button-outline" type="submit">Quitar de favoritos</button>

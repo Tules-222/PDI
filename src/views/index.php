@@ -27,7 +27,9 @@ $currentQuery = array_filter($currentQuery, static fn(string $value): bool => $v
 ?>
 <section class="hero">
   <div class="hero-content">
-    <h1>Emprendi conecta emprendedores</h1>
+    <p class="eyebrow">La feria de los emprendimientos</p>
+    <h1>Recorré la feria. Encontrá algo único.</h1>
+    <p>Descubrí productos de emprendimientos cercanos y conectá directamente con quienes los hacen.</p>
     <form class="search-form" action="/" method="get" role="search">
       <label class="visually-hidden" for="product-search">Buscar productos</label>
       <input id="product-search" type="search" name="q" list="product-tags" value="<?= html($search) ?>" placeholder="¿Qué producto estás buscando?">
@@ -38,6 +40,7 @@ $currentQuery = array_filter($currentQuery, static fn(string $value): bool => $v
       </datalist>
       <button class="button button-primary" type="submit">Buscar</button>
     </form>
+    <a class="hero-seller-link" href="/mi-puesto">¿Tenés un emprendimiento? Armá tu puesto en Emprendi <span aria-hidden="true">→</span></a>
   </div>
 </section>
 
@@ -138,8 +141,14 @@ $currentQuery = array_filter($currentQuery, static fn(string $value): bool => $v
               <p class="product-card-category"><?= html($categories[$producto['categoria']] ?? 'Otros') ?></p>
               <p class="product-description"><?= html((string) $producto['descripcion']) ?></p>
               <div class="product-price-box">
+                <?php if (!empty($producto['oferta_vigente'])): ?>
+                  <span class="price-original"><del><?= html(formatArs($producto['precio_original'])) ?></del></span>
+                  <span class="price-wholesale"><?= html(formatArs($producto['precio'])) ?> <span class="product-tag">Oferta</span></span>
+                  <span class="price-label">Oferta hasta <?= html(formatProductOfferDate($producto['oferta_fin'])) ?></span>
+                <?php else: ?>
                 <span class="price-wholesale"><?= html(formatArs($producto['precio'])) ?></span>
                 <span class="price-label">por <?= html((string) $producto['unidad']) ?> · compra mínima <?= (int) $producto['cantidad_minima'] ?></span>
+                <?php endif; ?>
               </div>
               <?php if ((int) $producto['cantidad_resenas'] > 0): ?>
                 <p class="product-rating" aria-label="Calificación <?= number_format((float) $producto['promedio_resenas'], 1, ',', '.') ?> de 5">

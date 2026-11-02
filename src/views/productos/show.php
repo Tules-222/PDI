@@ -53,7 +53,16 @@ $isFavorite = $isFavorite ?? false;
             <span class="product-condition"><?= html(ucfirst((string) $producto['condicion'])) ?></span>
           </div>
           <h1><?= html((string) $producto['nombre']) ?></h1>
-          <p class="product-detail-price"><?= html(formatArs($producto['precio'])) ?> <span>por <?= html((string) $producto['unidad']) ?></span></p>
+          <p class="product-detail-price">
+            <?php if (!empty($producto['oferta_vigente'])): ?>
+              <del><?= html(formatArs($producto['precio_original'])) ?></del>
+              <strong><?= html(formatArs($producto['precio'])) ?></strong>
+              <small>Oferta hasta <?= html(formatProductOfferDate($producto['oferta_fin'])) ?></small>
+            <?php else: ?>
+              <?= html(formatArs($producto['precio'])) ?>
+            <?php endif; ?>
+            <span>por <?= html((string) $producto['unidad']) ?></span>
+          </p>
           <div class="wholesale-summary">
             <p><strong>Compra mínima:</strong> <?= (int) $producto['cantidad_minima'] ?> <?= html((string) $producto['unidad']) ?></p>
             <p><strong>Disponibilidad:</strong> <?= $producto['stock'] === null ? 'A confirmar con el vendedor' : (int) $producto['stock'] . ' ' . html((string) $producto['unidad']) ?></p>
@@ -68,7 +77,7 @@ $isFavorite = $isFavorite ?? false;
 
           <section class="seller-summary">
             <p class="eyebrow">Vendido por</p>
-            <a href="/vendedores/<?= rawurlencode((string) $producto['usuario_id']) ?>"><?= html((string) ($producto['vendedor_nombre'] ?? 'Vendedor')) ?></a>
+            <a href="/emprendimientos/<?= rawurlencode((string) $producto['emprendimiento_id']) ?>"><?= html((string) ($producto['vendedor_nombre'] ?? 'Emprendimiento')) ?></a>
             <?php if (!empty($producto['vendedor_localidad']) || !empty($producto['vendedor_provincia'])): ?>
               <p><?= html(implode(', ', array_filter([$producto['vendedor_localidad'] ?? '', $producto['vendedor_provincia'] ?? '']))) ?></p>
             <?php endif; ?>
@@ -82,6 +91,11 @@ $isFavorite = $isFavorite ?? false;
               <button class="button button-danger" type="submit">Eliminar producto</button>
             </form>
           <?php elseif ($producto['estado'] === 'aprobado' && $currentUser !== null): ?>
+            <form method="post" action="/conversaciones">
+              <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
+              <input type="hidden" name="producto_id" value="<?= html((string) $producto['id']) ?>">
+              <button class="button button-outline" type="submit">Consultar al emprendimiento</button>
+            </form>
             <?php if ($isFavorite): ?>
               <form method="post" action="/productos/<?= rawurlencode((string) $producto['id']) ?>/favorito">
                 <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">

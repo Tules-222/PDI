@@ -21,13 +21,23 @@ $hasUnavailableItems = $hasUnavailableItems ?? false;
       <section class="cart-items" aria-label="Productos en el carrito">
         <?php foreach ($items as $item): ?>
           <article class="cart-item">
+            <?php if (!empty($item['imagen_url'])): ?>
+              <img class="cart-item-image" src="<?= html((string) $item['imagen_url']) ?>" alt="<?= html((string) $item['nombre']) ?>" loading="lazy">
+            <?php else: ?>
+              <span class="cart-item-image-placeholder" aria-label="Sin imagen">Sin imagen</span>
+            <?php endif; ?>
             <div class="cart-item-details">
               <h2><?= html((string) $item['nombre']) ?></h2>
               <?php if ($item['estado'] !== 'aprobado'): ?>
                 <p class="notice notice-review">No disponible: pendiente de revisión o no aprobado. Quitalo antes de confirmar el pedido.</p>
               <?php endif; ?>
               <p><?= html((string) $item['descripcion']) ?></p>
-              <strong>$<?= html(number_format((float) $item['precio'], 2, ',', '.')) ?> c/u</strong>
+              <strong>
+                <?php if (!empty($item['oferta_vigente'])): ?>
+                  <del>$<?= html(number_format((float) $item['precio_original'], 2, ',', '.')) ?></del>
+                <?php endif; ?>
+                $<?= html(number_format((float) $item['precio'], 2, ',', '.')) ?> c/u
+              </strong>
             </div>
             <form class="quantity-form" method="post" action="/carrito/<?= rawurlencode((string) $item['id']) ?>/cantidad">
               <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">

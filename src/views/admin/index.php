@@ -5,6 +5,7 @@ declare(strict_types=1);
 $productos = $productos ?? [];
 $usuarios = $usuarios ?? [];
 $reportes = $reportes ?? [];
+$reportesUsuarios = $reportesUsuarios ?? [];
 $categorias = $categorias ?? productCategories();
 $adminAuthenticated = $adminAuthenticated ?? false;
 $error = $error ?? null;
@@ -42,8 +43,13 @@ $error = $error ?? null;
 
     <nav class="admin-sections" aria-label="Secciones del panel">
       <a href="#productos">Publicaciones <span><?= count($productos) ?></span></a>
-      <a href="#reportes">Reportes <span><?= count($reportes) ?></span></a>
+      <a href="#reportes">Reportes <span><?= count($reportes) + count($reportesUsuarios) ?></span></a>
+      <a href="#reportes-cuentas">Reportes de cuentas</a>
       <a href="#usuarios">Usuarios <span><?= count(array_filter($usuarios, static fn(array $usuario): bool => $usuario['estado'] !== 'eliminado')) ?></span></a>
+      <a href="/admin/conversaciones">Conversaciones</a>
+      <a href="/admin/ofertas">Ofertas pendientes</a>
+      <a href="/admin/compras">Historial de compras</a>
+      <a href="/admin/auditoria">Auditoría</a>
     </nav>
 
     <section class="admin-section" id="productos">
@@ -123,11 +129,55 @@ $error = $error ?? null;
                   <input type="hidden" name="accion" value="descartar">
                   <button class="button button-outline" type="submit">Revisado, mantener publicación</button>
                 </form>
-                <form method="post" action="/admin/reportes/<?= rawurlencode((string) $reporte['id']) ?>/accion">
+                <form class="stacked-form" method="post" action="/admin/reportes/<?= rawurlencode((string) $reporte['id']) ?>/accion">
                   <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
                   <input type="hidden" name="accion" value="retirar">
+                  <label for="product-report-reason-<?= html((string) $reporte['id']) ?>">Motivo del retiro (10 a 500 caracteres)</label>
+                  <textarea id="product-report-reason-<?= html((string) $reporte['id']) ?>" name="motivo" minlength="10" maxlength="500" required></textarea>
                   <button class="button button-danger" type="submit">Retirar publicación</button>
                 </form>
+              </div>
+            </article>
+          <?php endforeach; ?>
+        </div>
+      <?php endif; ?>
+    </section>
+
+    <section class="admin-section" id="reportes-cuentas">
+      <div class="admin-section-heading">
+        <div>
+          <h2>Reportes de cuentas</h2>
+          <p>Revisá reportes confidenciales de perfiles comerciales.</p>
+        </div>
+        <span class="admin-count"><?= count($reportesUsuarios) ?> pendientes</span>
+      </div>
+      <?php if ($reportesUsuarios === []): ?>
+        <div class="empty-state"><h3>No hay reportes de cuentas pendientes</h3></div>
+      <?php else: ?>
+        <div class="admin-users">
+          <?php foreach ($reportesUsuarios as $reporte): ?>
+            <article class="admin-user-card">
+              <div>
+                <h3><?= html((string) $reporte['cuenta']) ?> · Cuenta <?= html((string) $reporte['estado_cuenta']) ?></h3>
+                <p>Motivo: <?= html(str_replace('_', ' ', (string) $reporte['motivo'])) ?></p>
+                <p><?= html((string) $reporte['detalle']) ?></p>
+                <small>Reportado por <?= html((string) ($reporte['reportante'] ?? 'usuario eliminado')) ?> · <?= html((string) $reporte['creado_en']) ?></small>
+              </div>
+              <div class="admin-user-actions">
+                <form method="post" action="/admin/reportes-usuarios/<?= rawurlencode((string) $reporte['id']) ?>/accion">
+                  <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
+                  <input type="hidden" name="accion" value="descartar">
+                  <button class="button button-outline" type="submit">Revisado, sin medida</button>
+                </form>
+                <?php if ($reporte['estado_cuenta'] !== 'eliminado' && $reporte['estado_cuenta'] !== 'bloqueado'): ?>
+                  <form class="stacked-form" method="post" action="/admin/reportes-usuarios/<?= rawurlencode((string) $reporte['id']) ?>/accion">
+                    <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
+                    <input type="hidden" name="accion" value="bloquear">
+                    <label for="account-report-action-<?= html((string) $reporte['id']) ?>">Motivo del bloqueo</label>
+                    <textarea id="account-report-action-<?= html((string) $reporte['id']) ?>" name="motivo" minlength="10" maxlength="500" required></textarea>
+                    <button class="button button-danger" type="submit">Bloquear cuenta y resolver reporte</button>
+                  </form>
+                <?php endif; ?>
               </div>
             </article>
           <?php endforeach; ?>
@@ -179,10 +229,14 @@ $error = $error ?? null;
                   <form method="post" action="/admin/usuarios/<?= rawurlencode((string) $usuario['id']) ?>/estado">
                     <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
                     <input type="hidden" name="estado" value="<?= $usuario['estado'] === 'activo' ? 'bloqueado' : 'activo' ?>">
+                    <label for="account-state-reason-<?= html((string) $usuario['id']) ?>">Motivo del cambio de estado</label>
+                    <textarea id="account-state-reason-<?= html((string) $usuario['id']) ?>" name="motivo" minlength="10" maxlength="500" required></textarea>
                     <button class="button button-outline" type="submit"><?= $usuario['estado'] === 'activo' ? 'Bloquear cuenta' : 'Desbloquear cuenta' ?></button>
                   </form>
-                  <form method="post" action="/admin/usuarios/<?= rawurlencode((string) $usuario['id']) ?>/eliminar" onsubmit="return confirm('Se eliminará el acceso, se anonimizarán los datos personales y se retirarán sus productos. El historial de pedidos se conservará. ¿Continuar?')">
+                  <form class="stacked-form" method="post" action="/admin/usuarios/<?= rawurlencode((string) $usuario['id']) ?>/eliminar" onsubmit="return confirm('Se eliminará el acceso, se anonimizarán los datos personales y se retirarán sus productos. El historial de pedidos se conservará. ¿Continuar?')">
                     <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
+                    <label for="account-delete-reason-<?= html((string) $usuario['id']) ?>">Motivo de eliminación</label>
+                    <textarea id="account-delete-reason-<?= html((string) $usuario['id']) ?>" name="motivo" minlength="10" maxlength="500" required></textarea>
                     <button class="button button-danger" type="submit">Eliminar cuenta</button>
                   </form>
                 </div>
