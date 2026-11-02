@@ -1,0 +1,2 @@
+ALTER TABLE usuarios
+    MODIFY tel VARCHAR(40) NOT NULL;
