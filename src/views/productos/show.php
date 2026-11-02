@@ -24,6 +24,17 @@ $isFavorite = $isFavorite ?? false;
               <?php if (!empty($producto['motivo_revision'])): ?><br>Motivo: <?= html((string) $producto['motivo_revision']) ?><?php endif; ?>
             </p>
           <?php endif; ?>
+          <?php if ($producto['estado'] === 'aprobado' && ($currentUser === null || (int) $producto['usuario_id'] !== (int) $currentUser['id'])): ?>
+            <?php if ($currentUser !== null): ?>
+              <form class="product-favorite-form product-favorite-detail" method="post" action="/productos/<?= rawurlencode((string) $producto['id']) ?>/favorito">
+                <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
+                <input type="hidden" name="return_to" value="<?= html('/productos/' . (string) $producto['id']) ?>">
+                <button class="favorite-heart" type="submit" aria-label="<?= $isFavorite ? 'Quitar de favoritos' : 'Guardar en favoritos' ?>"><?= $isFavorite ? '♥' : '♡' ?></button>
+              </form>
+            <?php else: ?>
+              <a class="favorite-heart favorite-heart-link product-favorite-detail" href="/usuarios/login?return_to=<?= rawurlencode('/productos/' . (string) $producto['id']) ?>" aria-label="Ingresá para guardar en favoritos">♡</a>
+            <?php endif; ?>
+          <?php endif; ?>
           <?php if (!empty($producto['imagenes'])): ?>
             <section class="product-gallery" data-product-carousel aria-label="Imágenes de <?= html((string) $producto['nombre']) ?>">
               <div class="product-gallery-slides">
@@ -96,17 +107,6 @@ $isFavorite = $isFavorite ?? false;
               <input type="hidden" name="producto_id" value="<?= html((string) $producto['id']) ?>">
               <button class="button button-outline" type="submit">Consultar al emprendimiento</button>
             </form>
-            <?php if ($isFavorite): ?>
-              <form method="post" action="/productos/<?= rawurlencode((string) $producto['id']) ?>/favorito">
-                <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
-                <button class="button button-outline favorite-button" type="submit">♥ Quitar de favoritos</button>
-              </form>
-            <?php else: ?>
-              <form method="post" action="/productos/<?= rawurlencode((string) $producto['id']) ?>/favorito">
-                <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
-                <button class="button button-outline favorite-button" type="submit">♡ Guardar en favoritos</button>
-              </form>
-            <?php endif; ?>
             <?php if ($producto['stock'] !== null && (int) $producto['stock'] >= (int) $producto['cantidad_minima']): ?>
               <form class="stacked-form" method="post" action="/carrito/agregar">
                 <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
@@ -119,6 +119,7 @@ $isFavorite = $isFavorite ?? false;
               </form>
             <?php else: ?>
               <p class="notice notice-review">El stock está pendiente de confirmación. El vendedor debe actualizar la publicación para habilitar pedidos.</p>
+              <button class="button button-outline" type="button" disabled>Agregar al carrito cuando haya stock</button>
             <?php endif; ?>
           <?php elseif ($producto['estado'] === 'aprobado'): ?>
             <a class="button button-primary" href="/usuarios/login?return_to=<?= rawurlencode('/productos/' . (string) $producto['id']) ?>">Ingresá para consultar o comprar</a>

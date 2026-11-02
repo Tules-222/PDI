@@ -29,6 +29,14 @@ $secondaryColor = isValidStoreColor((string) ($emprendimiento['color_secundario'
         <label for="descripcion">Presentación comercial</label>
         <textarea id="descripcion" name="descripcion" maxlength="500" rows="4"><?= html((string) ($emprendimiento['descripcion'] ?? '')) ?></textarea>
       </div>
+      <div class="form-field">
+        <label for="rubro">Rubro del emprendimiento</label>
+        <select id="rubro" name="rubro" required>
+          <?php foreach (productCategories() as $value => $label): ?>
+            <option value="<?= html($value) ?>" <?= ($emprendimiento['rubro'] ?? 'otros') === $value ? 'selected' : '' ?>><?= html($label) ?></option>
+          <?php endforeach; ?>
+        </select>
+      </div>
       <div class="form-grid">
         <div class="form-field">
           <label for="localidad">Localidad</label>
@@ -66,8 +74,35 @@ $secondaryColor = isValidStoreColor((string) ($emprendimiento['color_secundario'
             <input id="color_secundario" name="color_secundario" type="color" value="<?= html($secondaryColor) ?>" required>
           </div>
         </div>
+        <div class="branding-live-preview" data-branding-preview style="--store-primary: <?= html($primaryColor) ?>; --store-primary-text: <?= html(storeBrandColorText($primaryColor)) ?>; --store-secondary: <?= html($secondaryColor) ?>;">
+          <span>Vista previa de tu puesto</span>
+          <strong data-branding-name><?= html((string) ($emprendimiento['nombre'] ?? 'Nombre de tu emprendimiento')) ?></strong>
+          <small>Los colores y las imágenes ayudan a reconocer tu rubro en la feria.</small>
+        </div>
       </fieldset>
       <button class="button button-primary button-wide" type="submit"><?= $editing ? 'Guardar cambios' : 'Crear emprendimiento' ?></button>
     </form>
   </section>
 </main>
+<script>
+(() => {
+  const preview = document.querySelector('[data-branding-preview]');
+  if (!preview) return;
+  const nameInput = document.getElementById('nombre');
+  const namePreview = preview.querySelector('[data-branding-name]');
+  const primary = document.getElementById('color_primario');
+  const secondary = document.getElementById('color_secundario');
+  const syncPreview = () => {
+    preview.style.setProperty('--store-primary', primary.value);
+    const color = primary.value.match(/[0-9a-f]{2}/gi) || [];
+    const [red, green, blue] = color.map((component) => Number.parseInt(component, 16));
+    const brightness = (red * 299 + green * 587 + blue * 114) / 1000;
+    preview.style.setProperty('--store-primary-text', brightness > 150 ? '#183247' : '#ffffff');
+    preview.style.setProperty('--store-secondary', secondary.value);
+    namePreview.textContent = nameInput.value.trim() || 'Nombre de tu emprendimiento';
+  };
+  nameInput.addEventListener('input', syncPreview);
+  primary.addEventListener('input', syncPreview);
+  secondary.addEventListener('input', syncPreview);
+})();
+</script>

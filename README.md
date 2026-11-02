@@ -38,6 +38,14 @@ convierte las cuentas antiguas con productos al rol `emprendedor` y las demás
 al rol `visitante`. Cada cuenta tiene al menos una tienda; puede crear más de
 una y asociar cada producto a una tienda concreta.
 
+El teléfono del registro admite números argentinos de diez dígitos, incluso
+con formatos habituales de código de país o prefijo. Esto valida el formato,
+pero no confirma que la línea esté activa; para comprobar titularidad haría
+falta integrar verificación por SMS. Dirección, localidad y provincia se
+contrastan en el servidor con Georef Argentina. El alta requiere conexión a
+ese servicio; si no está disponible, se informa el error y no se crea la
+cuenta.
+
 ### Entidades principales
 
 - **Usuario:** cuenta, credenciales, rol, estado y datos personales. Los datos
@@ -61,6 +69,10 @@ una y asociar cada producto a una tienda concreta.
 
 - El catálogo muestra únicamente productos aprobados y de tiendas activas.
   Incluye búsqueda, categorías, filtros, orden, detalle, favoritos y reseñas.
+- El buscador de tiendas permite filtrar por rubro y buscar varias palabras
+  sin distinguir mayúsculas en nombre, descripción y ubicación. Cada perfil
+  guarda su rubro, banner, logo y colores, y los seguidores se asocian a una
+  tienda concreta, no a todas las tiendas de su propietario.
 - «Más vendidos» cuenta unidades de pedidos creados en los últimos 90 días
   cuyo pago fue aprobado y cuyo pedido está entregado.
 - Los perfiles públicos pertenecen a una tienda y muestran su nombre,
@@ -119,6 +131,10 @@ la consulta es de solo lectura y queda auditada.
   habilitada cuando SMTP y `APP_URL` están configurados correctamente.
 - Las conversaciones persisten en base de datos y se actualizan cada cinco
   segundos. Solo comprador y vendedor participantes pueden responder.
+  Los mensajes muestran si fueron enviados o recibidos, y el menú suma los
+  mensajes y notificaciones sin leer en un indicador. La pantalla de
+  notificaciones también lista los mensajes pendientes y permite abrir su
+  conversación.
   Para abrir una conversación desde administración se exige un motivo y se
   registra el acceso; el panel no muestra su contenido en el listado.
 - Usuarios autenticados pueden reportar productos y perfiles comerciales.
@@ -203,7 +219,7 @@ código y el backlog antes de escribir historias.
 | `src/views/` | Plantillas PHP de páginas, layouts y secciones del sitio. |
 | `src/utils/` | Funciones compartidas de autenticación, HTML, pagos, productos y personalización de tiendas. |
 | `src/database/database.php` | Conexión PDO. |
-| `src/database/migrations/` | Migraciones SQL; la más reciente es `021_roles_visitante_emprendedor.mysql.sql`. |
+| `src/database/migrations/` | Migraciones SQL; la más reciente es `022_rubro_emprendimientos.mysql.sql`. |
 | `scripts/migrate.php` | Aplica migraciones `.sql` pendientes y registra cuáles se ejecutaron. |
 | `public/uploads/productos/` | Imágenes de productos cargadas por usuarios. |
 | `public/uploads/emprendimientos/` | Logos y banners de tiendas cargados por usuarios. |
@@ -255,6 +271,7 @@ funciones que dependan de cambios recientes.
 | `APP_TIMEZONE` | Zona horaria de la aplicación; por defecto `America/Argentina/Buenos_Aires`. |
 | `ADMIN_PIN` | PIN compartido para el panel administrativo. |
 | `APP_URL` | URL pública HTTPS necesaria para habilitar pagos y recuperación de contraseña. |
+| `GEOREF_CA_BUNDLE` | Ruta opcional a un bundle CA legible por PHP para validar TLS con Georef; no deshabilitar la verificación de certificados. |
 | `MP_ACCESS_TOKEN`, `MP_WEBHOOK_SECRET` | Credenciales privadas de Checkout Pro y su webhook; mantener vacías para dejar pagos deshabilitados. |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_ENCRYPTION`, `SMTP_FROM_EMAIL`, `SMTP_FROM_NAME` | Envío de recuperación de contraseña; `SMTP_ENCRYPTION` acepta `tls` o `ssl`. |
 | `SUPPORT_EMAIL` | Dirección de soporte opcional que aparece en `/ayuda` solo si es válida. |

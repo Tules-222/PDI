@@ -24,12 +24,11 @@ $currentQuery = [
   'precio_max' => $maximumPrice,
 ];
 $currentQuery = array_filter($currentQuery, static fn(string $value): bool => $value !== '');
+$returnTo = '/' . http_build_query([...$currentQuery, 'pagina' => $page]);
 ?>
 <section class="hero">
   <div class="hero-content">
-    <p class="eyebrow">La feria de los emprendimientos</p>
-    <h1>Recorré la feria. Encontrá algo único.</h1>
-    <p>Descubrí productos de emprendimientos cercanos y conectá directamente con quienes los hacen.</p>
+    <h1>Emprendi, tu feria digital</h1>
     <form class="search-form" action="/" method="get" role="search">
       <label class="visually-hidden" for="product-search">Buscar productos</label>
       <input id="product-search" type="search" name="q" list="product-tags" value="<?= html($search) ?>" placeholder="¿Qué producto estás buscando?">
@@ -40,7 +39,7 @@ $currentQuery = array_filter($currentQuery, static fn(string $value): bool => $v
       </datalist>
       <button class="button button-primary" type="submit">Buscar</button>
     </form>
-    <a class="hero-seller-link" href="/mi-puesto">¿Tenés un emprendimiento? Armá tu puesto en Emprendi <span aria-hidden="true">→</span></a>
+    <p>Descubrí productos únicos y conectá con quienes los hacen.</p>
   </div>
 </section>
 
@@ -123,13 +122,24 @@ $currentQuery = array_filter($currentQuery, static fn(string $value): bool => $v
         <?php foreach ($productos as $producto): ?>
           <?php $hasStock = $producto['stock'] !== null && (int) $producto['stock'] > 0; ?>
           <article class="product-card">
-            <a class="product-card-image-link" href="/productos/<?= rawurlencode((string) $producto['id']) ?>" aria-label="Ver <?= html((string) $producto['nombre']) ?>">
-              <?php if (!empty($producto['imagenes'][0]['url'])): ?>
-                <img class="product-card-image" src="<?= html($producto['imagenes'][0]['url']) ?>" alt="<?= html((string) $producto['nombre']) ?>" loading="lazy">
-              <?php else: ?>
-                <span class="product-card-image-placeholder">Sin imagen</span>
+            <div class="product-card-media">
+              <a class="product-card-image-link" href="/productos/<?= rawurlencode((string) $producto['id']) ?>" aria-label="Ver <?= html((string) $producto['nombre']) ?>">
+                <?php if (!empty($producto['imagenes'][0]['url'])): ?>
+                  <img class="product-card-image" src="<?= html($producto['imagenes'][0]['url']) ?>" alt="<?= html((string) $producto['nombre']) ?>" loading="lazy">
+                <?php else: ?>
+                  <span class="product-card-image-placeholder">Sin imagen</span>
+                <?php endif; ?>
+              </a>
+              <?php if ($currentUser === null): ?>
+                <a class="favorite-heart favorite-heart-link" href="/usuarios/login?return_to=<?= rawurlencode('/productos/' . (string) $producto['id']) ?>" aria-label="Ingresá para guardar en favoritos">♡</a>
+              <?php elseif ((int) $producto['usuario_id'] !== (int) $currentUser['id']): ?>
+                <form class="product-favorite-form" method="post" action="/productos/<?= rawurlencode((string) $producto['id']) ?>/favorito">
+                  <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
+                  <input type="hidden" name="return_to" value="<?= html($returnTo) ?>">
+                  <button class="favorite-heart" type="submit" aria-label="<?= in_array((int) $producto['id'], $favoriteProductIds, true) ? 'Quitar de favoritos' : 'Guardar en favoritos' ?>"><?= in_array((int) $producto['id'], $favoriteProductIds, true) ? '♥' : '♡' ?></button>
+                </form>
               <?php endif; ?>
-            </a>
+            </div>
             <div class="product-info">
               <div class="product-card-badges">
                 <span class="product-tag"><?= $hasStock ? 'Stock confirmado' : 'Consultar disponibilidad' ?></span>
@@ -171,14 +181,8 @@ $currentQuery = array_filter($currentQuery, static fn(string $value): bool => $v
                   <?php else: ?>
                     <button class="button button-outline" type="button" disabled>Sin stock disponible</button>
                   <?php endif; ?>
-                <?php endif; ?>
-                <?php if ($currentUser !== null): ?>
-                  <form method="post" action="/productos/<?= rawurlencode((string) $producto['id']) ?>/favorito">
-                    <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
-                    <button class="button button-outline favorite-button" type="submit" aria-label="<?= in_array((int) $producto['id'], $favoriteProductIds, true) ? 'Quitar de favoritos' : 'Guardar en favoritos' ?>">
-                      <?= in_array((int) $producto['id'], $favoriteProductIds, true) ? '♥ Guardado' : '♡ Guardar' ?>
-                    </button>
-                  </form>
+                <?php elseif ($currentUser === null): ?>
+                  <a class="button button-primary" href="/usuarios/login?return_to=<?= rawurlencode('/productos/' . (string) $producto['id']) ?>">Ingresá para comprar</a>
                 <?php endif; ?>
               </div>
             </div>

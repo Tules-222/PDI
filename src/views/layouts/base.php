@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="es">
+    <?php $currentPath = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH); ?>
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -18,21 +19,21 @@
                 </a>
                 <?php if (!empty($adminPanel)): ?>
                     <span class="admin-header-label">Panel de administración</span>
+                    <button class="history-back-button" type="button" data-history-back>← Volver</button>
                     <a class="home-link" href="/">Volver al sitio</a>
                 <?php else: ?>
                     <a class="home-link" href="/">La feria</a>
+                    <?php if ($currentPath !== '/'): ?><button class="history-back-button" type="button" data-history-back>← Volver</button><?php endif; ?>
                     <nav class="site-actions desktop-actions" aria-label="Acciones principales">
                         <a class="nav-link" href="/emprendimientos">Emprendimientos</a>
                         <a class="nav-link cart-link" href="/carrito">Carrito</a>
                         <?php if ($currentUser !== null): ?>
                             <a class="nav-link nav-link-primary" href="/mi-puesto"><?= $currentUser['rol'] === 'emprendedor' ? 'Mi puesto' : 'Quiero emprender' ?></a>
                             <details class="account-menu">
-                                <summary>Mi cuenta</summary>
+                                <summary>Mi cuenta<?php if ($pendingNotificationCount > 0): ?> <span class="notification-badge" aria-label="<?= $pendingNotificationCount ?> avisos y mensajes sin leer"><?= $pendingNotificationCount > 99 ? '99+' : $pendingNotificationCount ?></span><?php endif; ?></summary>
                                 <div class="account-menu-panel">
                                     <span class="menu-greeting">Hola, <?= html($currentUser['nombre']) ?></span>
                                     <?php if ($currentUser['rol'] === 'emprendedor'): ?>
-                                        <a href="/mi-puesto">Panel de mi puesto</a>
-                                        <a href="/productos/create">Publicar producto</a>
                                         <a href="/conversaciones">Mensajes</a>
                                         <a href="/ventas">Ventas recibidas</a>
                                     <?php else: ?>
@@ -41,7 +42,7 @@
                                     <?php endif; ?>
                                     <a href="/mis-compras">Ver mis compras</a>
                                     <a href="/favoritos">Mis favoritos</a>
-                                    <a href="/notificaciones">Notificaciones</a>
+                                    <a href="/notificaciones">Notificaciones<?php if ($pendingNotificationCount > 0): ?> <span class="notification-badge"><?= $pendingNotificationCount > 99 ? '99+' : $pendingNotificationCount ?></span><?php endif; ?></a>
                                     <a href="/perfil">Mi perfil</a>
                                     <form action="/usuarios/logout" method="post">
                                         <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
@@ -55,7 +56,7 @@
                         <?php endif; ?>
                     </nav>
                     <details class="mobile-navigation">
-                        <summary aria-label="Abrir navegación">Menú</summary>
+                        <summary aria-label="Abrir navegación">Menú<?php if ($pendingNotificationCount > 0): ?> <span class="notification-badge" aria-label="<?= $pendingNotificationCount ?> avisos y mensajes sin leer"><?= $pendingNotificationCount > 99 ? '99+' : $pendingNotificationCount ?></span><?php endif; ?></summary>
                         <nav class="mobile-navigation-panel" aria-label="Navegación">
                             <a href="/">Recorrer la feria</a>
                             <a href="/emprendimientos">Emprendimientos</a>
@@ -64,7 +65,6 @@
                                 <span class="menu-greeting">Hola, <?= html($currentUser['nombre']) ?></span>
                                 <a href="/mi-puesto"><?= $currentUser['rol'] === 'emprendedor' ? 'Mi puesto' : 'Quiero emprender' ?></a>
                                 <?php if ($currentUser['rol'] === 'emprendedor'): ?>
-                                    <a href="/productos/create">Publicar producto</a>
                                     <a href="/conversaciones">Mensajes</a>
                                     <a href="/ventas">Ventas recibidas</a>
                                 <?php else: ?>
@@ -72,7 +72,7 @@
                                 <?php endif; ?>
                                 <a href="/mis-compras">Ver mis compras</a>
                                 <a href="/favoritos">Mis favoritos</a>
-                                <a href="/notificaciones">Notificaciones</a>
+                                <a href="/notificaciones">Notificaciones<?php if ($pendingNotificationCount > 0): ?> <span class="notification-badge"><?= $pendingNotificationCount > 99 ? '99+' : $pendingNotificationCount ?></span><?php endif; ?></a>
                                 <a href="/perfil">Mi perfil</a>
                                 <form action="/usuarios/logout" method="post">
                                     <input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
@@ -93,5 +93,17 @@
             <p class="flash-message" role="status"><?= html($flash) ?></p>
         <?php endif; ?>
         <?= $content ?>
+        <script>
+        document.querySelectorAll('[data-history-back]').forEach((button) => {
+            button.addEventListener('click', () => {
+                const previousPage = document.referrer ? new URL(document.referrer) : null;
+                if (previousPage && previousPage.origin === window.location.origin) {
+                    window.history.back();
+                } else {
+                    window.location.assign('/');
+                }
+            });
+        });
+        </script>
     </body>
 </html>

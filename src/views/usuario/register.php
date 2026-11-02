@@ -16,7 +16,7 @@ $formData = $formData ?? [];
 			<p class="notice notice-error" role="alert"><?= html($error) ?></p>
 		<?php endif; ?>
 
-		<form class="stacked-form" method="post" action="/usuarios">
+		<form class="stacked-form" method="post" action="/usuarios" data-georef-address>
 			<input type="hidden" name="csrf_token" value="<?= html($csrfToken) ?>">
 			<fieldset class="role-options">
 				<legend>¿Cómo querés recorrer la feria?</legend>
@@ -46,20 +46,24 @@ $formData = $formData ?? [];
 				</div>
 				<div class="form-field">
 					<label for="telefono">Teléfono</label>
-					<input id="telefono" name="telefono" type="tel" maxlength="30" autocomplete="tel" value="<?= html((string) ($formData['telefono'] ?? '')) ?>" required>
+					<input id="telefono" name="telefono" type="tel" maxlength="20" pattern="[0-9+(). /-]{8,20}" title="Ingresá un teléfono argentino de 10 dígitos, con un máximo de 13 cifras." autocomplete="tel" data-argentina-phone inputmode="tel" value="<?= html((string) ($formData['telefono'] ?? '')) ?>" required>
 				</div>
 				<div class="form-field">
-					<label for="direccion">Dirección</label>
+					<label for="direccion">Dirección (calle y altura)</label>
 					<input id="direccion" name="direccion" type="text" maxlength="255" autocomplete="street-address" value="<?= html((string) ($formData['direccion'] ?? '')) ?>" required>
 				</div>
 				<div class="form-field">
 					<label for="localidad">Localidad</label>
-					<input id="localidad" name="localidad" type="text" maxlength="100" autocomplete="address-level2" value="<?= html((string) ($formData['localidad'] ?? '')) ?>">
+					<input id="localidad" name="localidad" type="text" maxlength="100" list="localidades-argentinas" autocomplete="address-level2" value="<?= html((string) ($formData['localidad'] ?? '')) ?>" required>
+					<datalist id="localidades-argentinas"></datalist>
 				</div>
 				<div class="form-field">
 					<label for="provincia">Provincia</label>
-					<input id="provincia" name="provincia" type="text" maxlength="100" autocomplete="address-level1" value="<?= html((string) ($formData['provincia'] ?? '')) ?>">
+					<select id="provincia" name="provincia" data-selected="<?= html((string) ($formData['provincia'] ?? '')) ?>" autocomplete="address-level1" required>
+						<option value="">Cargando provincias...</option>
+					</select>
 				</div>
+				<p id="georef-status" class="georef-status" data-georef-status role="status">Las localidades y direcciones se verifican con Georef Argentina.</p>
 				<div class="form-field">
 					<label for="codigo_postal">Código postal</label>
 					<input id="codigo_postal" name="codigo_postal" type="text" maxlength="12" autocomplete="postal-code" value="<?= html((string) ($formData['codigo_postal'] ?? '')) ?>">
@@ -78,3 +82,4 @@ $formData = $formData ?? [];
 		<p class="form-footer">¿Ya tenés cuenta? <a href="/usuarios/login">Iniciá sesión</a></p>
 	</section>
 </main>
+<script src="/georef-address.js" defer></script>

@@ -122,10 +122,51 @@ function productImages(PDO $pdo, int $productId): array
   );
   $stmt->execute(['producto_id' => $productId]);
 
-  return array_map(
-    static fn(string $path): array => ['ruta' => $path, 'url' => $path],
-    array_map('strval', $stmt->fetchAll(PDO::FETCH_COLUMN))
+  $images = [];
+  foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $path) {
+    $path = (string) $path;
+    if (!productImageFileIsAvailable($path)) {
+      error_log('Se omitió una imagen de producto cuyo archivo no existe: ' . $path);
+      continue;
+    }
+    $images[] = ['ruta' => $path, 'url' => $path];
+  }
+
+  return $images;
+}
+
+function productImageFileIsAvailable(string $path): bool
+{
+  $parsedUrl = parse_url($path);
+  if (!is_array($parsedUrl)) {
+    return false;
+  }
+
+  if (isset($parsedUrl['host'])) {
+    return isset($parsedUrl['scheme'])
+      && in_array(strtolower((string) $parsedUrl['scheme']), ['http', 'https'], true);
+  }
+
+  $urlPath = $parsedUrl['path'] ?? '';
+  if (
+    !is_string($urlPath)
+    || preg_match('~^/uploads/productos/[a-f0-9]{32}\.(?:jpg|png|webp)$~D', $urlPath) !== 1
+  ) {
+    return false;
+  }
+
+  $publicDirectory = realpath(dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'public');
+  if ($publicDirectory === false) {
+    return false;
+  }
+
+  $filePath = realpath(
+    $publicDirectory . DIRECTORY_SEPARATOR
+    . str_replace('/', DIRECTORY_SEPARATOR, ltrim($urlPath, '/'))
   );
+  return $filePath !== false
+    && str_starts_with($filePath, $publicDirectory . DIRECTORY_SEPARATOR)
+    && is_file($filePath);
 }
 
 /**
@@ -155,9 +196,14 @@ function attachProductImages(PDO $pdo, array $products): array
   $stmt->execute($parameters);
   $imagesByProduct = [];
   foreach ($stmt->fetchAll() as $image) {
+    $path = (string) $image['ruta'];
+    if (!productImageFileIsAvailable($path)) {
+      error_log('Se omitió una imagen de producto cuyo archivo no existe: ' . $path);
+      continue;
+    }
     $imagesByProduct[(int) $image['producto_id']][] = [
-      'ruta' => (string) $image['ruta'],
-      'url' => (string) $image['ruta'],
+      'ruta' => $path,
+      'url' => $path,
     ];
   }
 

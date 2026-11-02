@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 $conversaciones = $conversaciones ?? [];
+$currentUserId = $currentUser['id'] ?? 0;
 ?>
 <main class="page-content">
   <a class="back-link" href="/">← Volver al catálogo</a>
@@ -17,7 +18,14 @@ $conversaciones = $conversaciones ?? [];
           <div>
             <h2><a href="/conversaciones/<?= rawurlencode((string) $conversacion['id']) ?>"><?= html((string) $conversacion['interlocutor']) ?></a></h2>
             <p><?= html((string) ($conversacion['emprendimiento'] ?? 'Emprendimiento')) ?><?= !empty($conversacion['producto']) ? ' · ' . html((string) $conversacion['producto']) : '' ?></p>
-            <p class="conversation-preview"><?= html((string) ($conversacion['ultimo_mensaje'] ?? 'Iniciá la conversación con un mensaje.')) ?></p>
+            <p class="conversation-preview">
+              <?php if (!empty($conversacion['ultimo_mensaje'])): ?>
+                <span class="conversation-direction"><?= (int) ($conversacion['ultimo_remitente_id'] ?? 0) === (int) $currentUserId ? 'Enviado:' : 'Recibido:' ?></span>
+                <?= html((string) $conversacion['ultimo_mensaje']) ?>
+              <?php else: ?>
+                Iniciá la conversación con un mensaje.
+              <?php endif; ?>
+            </p>
           </div>
           <div class="conversation-meta">
             <?php if ((int) $conversacion['no_leidos'] > 0): ?><span class="conversation-unread"><?= (int) $conversacion['no_leidos'] ?> sin leer</span><?php endif; ?>
