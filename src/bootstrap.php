@@ -118,11 +118,21 @@ $app->get('/georef/localidades', function ($request, $response) {
     $result = georefGet('localidades', [
       'provincia' => $province,
       'nombre' => $term,
-      'campos' => 'id,nombre,provincia',
-      'max' => 20,
+      'campos' => 'id,nombre,provincia,municipio,departamento',
+      'max' => 100,
     ]);
+    $localities = $result['localidades'] ?? null;
+    if (!is_array($localities)) {
+      throw new GeorefServiceException('El servicio de direcciones devolvió localidades inválidas.');
+    }
+    $localities = array_values(array_filter(
+      $localities,
+      static fn($locality): bool => is_array($locality)
+        && isset($locality['nombre'])
+        && mb_stripos((string) $locality['nombre'], $term, 0, 'UTF-8') !== false
+    ));
     $response->getBody()->write(json_encode(
-      ['localidades' => $result['localidades'] ?? []],
+      ['localidades' => $localities],
       JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE
     ));
     return $response->withHeader('Content-Type', 'application/json; charset=UTF-8')
@@ -2050,21 +2060,6 @@ $app->post('/usuarios', function ($request, $response) use ($renderer, $requireC
   ) {
     return view($renderer, $response->withStatus(422), '/usuario/register.php', [
       'error' => 'Completá los campos y verificá que el teléfono tenga 10 dígitos argentinos.',
-      'formData' => $user,
-    ]);
-  }
-
-  try {
-    if (!argentinaAddressIsValid($user['direccion'], $user['localidad'], $user['provincia'])) {
-      return view($renderer, $response->withStatus(422), '/usuario/register.php', [
-        'error' => 'La dirección, localidad y provincia no coinciden con una dirección existente en Argentina.',
-        'formData' => $user,
-      ]);
-    }
-  } catch (GeorefServiceException $exception) {
-    error_log($exception->getMessage());
-    return view($renderer, $response->withStatus(503), '/usuario/register.php', [
-      'error' => 'No pudimos verificar la dirección ahora. Intentá nuevamente cuando el servicio geográfico esté disponible.',
       'formData' => $user,
     ]);
   }

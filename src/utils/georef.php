@@ -5,7 +5,6 @@ declare(strict_types=1);
 final class GeorefServiceException extends RuntimeException
 {
 }
-
 /**
  * @return array<string, mixed>
  */
@@ -135,48 +134,4 @@ function argentinaPhoneIsValid(string $phone): bool
   }
 
   return strlen($digits) === 10 && preg_match('/^[1-9]\d{9}$/', $digits) === 1;
-}
-
-function argentinaAddressIsValid(string $address, string $locality, string $province): bool
-{
-  $localities = georefGet('localidades', [
-    'nombre' => $locality,
-    'provincia' => $province,
-    'campos' => 'id,nombre,provincia',
-    'max' => 20,
-  ]);
-  $matches = $localities['localidades'] ?? [];
-  $matchingLocality = false;
-  foreach (is_array($matches) ? $matches : [] as $match) {
-    if (
-      is_array($match)
-      && isset($match['nombre'], $match['provincia']['nombre'])
-      && mb_strtolower(trim((string) $match['nombre'])) === mb_strtolower(trim($locality))
-      && mb_strtolower(trim((string) $match['provincia']['nombre'])) === mb_strtolower(trim($province))
-    ) {
-      $matchingLocality = true;
-      break;
-    }
-  }
-  if (!$matchingLocality) {
-    return false;
-  }
-
-  $addresses = georefGet('direcciones', [
-    'direccion' => $address,
-    'localidad' => $locality,
-    'provincia' => $province,
-    'max' => 10,
-  ]);
-  foreach ($addresses['direcciones'] ?? [] as $candidate) {
-    if (
-      is_array($candidate)
-      && isset($candidate['provincia']['nombre'])
-      && mb_strtolower(trim((string) $candidate['provincia']['nombre'])) === mb_strtolower(trim($province))
-    ) {
-      return true;
-    }
-  }
-
-  return false;
 }

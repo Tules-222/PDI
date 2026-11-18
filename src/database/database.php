@@ -33,20 +33,16 @@ class Database
       return $this->connection;
     }
 
-    try {
-      $port = $_ENV['DB_PORT'] ?? ($this->driver === 'pgsql' ? '5432' : '3306');
-      $dsn = $this->buildDsn($port);
+    $port = $_ENV['DB_PORT'] ?? ($this->driver === 'pgsql' ? '5432' : '3306');
+    $dsn = $this->buildDsn($port);
 
-      $this->connection = new PDO($dsn, $this->username, $this->password, [
-        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-        PDO::ATTR_EMULATE_PREPARES => false,
-      ]);
+    $this->connection = new PDO($dsn, $this->username, $this->password, [
+      PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+      PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+      PDO::ATTR_EMULATE_PREPARES => false,
+    ]);
 
-      return $this->connection;
-    } catch (PDOException $e) {
-      throw new \Exception("Fallo en la conexión a la base de datos");
-    }
+    return $this->connection;
   }
 
   private function buildDsn(string $port): string

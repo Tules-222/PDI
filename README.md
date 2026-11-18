@@ -38,13 +38,15 @@ convierte las cuentas antiguas con productos al rol `emprendedor` y las demás
 al rol `visitante`. Cada cuenta tiene al menos una tienda; puede crear más de
 una y asociar cada producto a una tienda concreta.
 
-El teléfono del registro admite números argentinos de diez dígitos, incluso
+El El teléfono del registro admite números argentinos de diez dígitos, incluso
 con formatos habituales de código de país o prefijo. Esto valida el formato,
 pero no confirma que la línea esté activa; para comprobar titularidad haría
-falta integrar verificación por SMS. Dirección, localidad y provincia se
-contrastan en el servidor con Georef Argentina. El alta requiere conexión a
-ese servicio; si no está disponible, se informa el error y no se crea la
-cuenta.
+falta integrar verificación por SMS. Las sugerencias de provincias y
+localidades usan [Georef Argentina](https://datosgobar.github.io/georef-ar-api/),
+pero son opcionales: una calle o localidad no se rechaza por no figurar en ese
+catálogo y el formulario sigue disponible si el servicio no responde. El CPA
+depende de la dirección exacta, no solo del municipio; se puede consultar en
+[Correo Argentino](https://www.correoargentino.com.ar/formularios/cpa).
 
 ### Entidades principales
 
@@ -242,7 +244,10 @@ Requisitos: PHP 8.1 o superior, Composer, PDO con el driver de MySQL y una base
 MySQL/MariaDB.
 
 1. Copiar `.env.example` a `.env`, crear la base de datos configurada y ajustar
-   sus credenciales. Reemplazar `ADMIN_PIN` por un valor aleatorio y privado.
+   sus credenciales. En una instalación local estándar de XAMPP, `root` suele
+   no tener contraseña; en ese caso, dejar `DB_PASS=` vacío. Reemplazar
+   `ADMIN_PIN` por un valor aleatorio y privado. No usar la cuenta `root` sin
+   contraseña fuera del entorno local.
 2. Instalar dependencias y aplicar migraciones:
 
    ```bash
